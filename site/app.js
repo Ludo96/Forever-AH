@@ -165,6 +165,12 @@ const COLS = {
   near: { label: "At this price", num: 1, cls: "hide-sm", cell: r => num(r.near), val: r => r.near },
   profit: { label: "Resale margin", num: 1, cell: r => money(r.profit), val: r => r.profit },
   sell: { label: "Vendor pays", num: 1, cls: "hide-sm", cell: r => money(r.sell), val: r => r.sell },
+  sold: { label: "Sold", num: 1, cell: r => num(r.sold1), val: r => r.sold1 },
+  value: { label: "Value sold", num: 1, cell: r => money(r.value), val: r => r.value },
+  stock: { label: "Stock lasts", num: 1, cls: "hide-sm", val: r => r.stock, first: 1,
+    cell: r => r.stock == null ? h("span", { class: "dim", text: "–" })
+      : r.stock < 1 ? (Math.round(r.stock * 24) <= 1 ? "1 hour" : `${Math.round(r.stock * 24)} hours`)
+        : `${r.stock < 10 ? r.stock.toFixed(1) : Math.round(r.stock)} days` },
   skill: { label: "Skill", num: 1, cls: "hide-sm", always: 1, cell: r => String(r.skill), val: r => r.skill, first: 1 },
   cost: { label: "Materials", num: 1, always: 1, cell: r => money(r.cost), val: r => r.cost },
   sale: { label: "Sells for", num: 1, cls: "hide-sm", cell: r => money(r.low), val: r => r.low },
@@ -191,6 +197,15 @@ const TABS = {
     cols: ["star", "name", "skill", "cost", "sale", "craft", "usual"], sort: ["craft", -1],
     rows: craftRows,
     blurb: () => `Material cost at current market prices (vendor price when cheaper), and what is left after selling at the lowest listing and paying the ${Math.round(currentHouse().cut * 100)}% auction cut. Recipes come from Wrath Classic data, so a few differ in Forever. Check the breakdown against the recipe in game before you buy.`,
+  },
+  volume: {
+    label: "Volume",
+    cols: ["star", "name", "sold", "value", "qty", "stock", "low"], sort: ["value", -1],
+    rows: () => S.rows.filter(r => r.sold1 > 0),
+    blurb: () => {
+      const span = S.salesHours >= 24 ? "the past 24 hours" : `the past ${Math.round(S.salesHours)} hour${Math.round(S.salesHours) === 1 ? "" : "s"} (counting started recently)`;
+      return `Estimated sales over ${span}. Blizzard does not publish sales, so these count listings that vanished with plenty of time left or shrank between hourly snapshots. Cancelled auctions look the same as sales, so read the figures as an upper estimate. Value is units sold at the current market price; stock lasts is how long today's supply would cover that pace.`;
+    },
   },
   all: {
     label: "All items",
@@ -304,11 +319,20 @@ async function loadHouse() {
       lo7: r[c.low7dMin], m7, hi7: r[c.low7dMax], mk7, n7: r[c.points7d],
       lo30: r[c.low30dMin], m30: r[c.low30dMed], hi30: r[c.low30dMax], n30: r[c.points30d],
       sell, change: prev ? low / prev - 1 : null,
+      sold1: c.sold1d == null ? null : r[c.sold1d], sold7: c.sold7d == null ? null : r[c.sold7d],
       discount: m7 ? 1 - low / m7 : 0,
       profit: Math.round(mk7 * (1 - house.cut)) - low,
       vprofit: sell ? sell - low : null,
     };
   });
+  // Sales are only counted since the collector started comparing snapshots,
+  // so scale to a daily rate while there is less than a day of them.
+  const hours = house.sales_since ? Math.min(24, Math.max(1, (S.updated - house.sales_since) / 3600 + 1)) : 0;
+  S.salesHours = hours;
+  for (const r of S.rows) {
+    r.value = r.sold1 ? r.sold1 * r.market : null;
+    r.stock = r.sold1 && hours ? r.qty / (r.sold1 * 24 / hours) : null;       // days of supply
+  }
   S.byId = new Map(S.rows.map(r => [r.id, r]));
   renderChrome();
   render();
@@ -367,6 +391,7 @@ function showEmpty(title, body) {
 function emptyMessage(q) {
   const house = currentHouse();
   if (q) return [`Nothing matches “${q}”`, "Check the spelling, or try the All items view."];
+  if (S.tab === "volume") return ["No sales counted yet", "Sales are estimated by comparing each hourly snapshot with the one before, so the first figures appear after the next refresh."];
   if (S.tab === "prof" && !S.recipes) return ["Recipes could not be loaded", "Reload the page to try again."];
   if (S.tab === "prof") return ["No priced recipes yet", "None of this profession's materials or results are on sale right now."];
   if (S.tab === "watch") return ["Your watchlist is empty", "Star any item to keep it here. The list is saved in this browser only."];
@@ -506,6 +531,7 @@ function renderDetail(keepCharts) {
       fact("Lowest now", money(row.low)),
       fact("Market now", money(row.market)),
       fact("On sale", `${num(row.qty)} in ${num(row.listings)} listing${row.listings === 1 ? "" : "s"}`),
+      row.sold1 != null && S.salesHours ? fact(S.salesHours >= 24 ? "Sold in 24 hours" : `Sold in ${Math.round(S.salesHours)} hours`, `about ${num(row.sold1)}`) : null,
       row.sell ? fact("Vendor pays", money(row.sell)) : null) : null,
     ...recipesFor(row.id).map(recipeBlock),
     row.listed && row.n7 > 1 ? h("table", { class: "spread" },
@@ -540,7 +566,9 @@ function renderDetail(keepCharts) {
       h("span", null, h("i", { class: "key s2" }), "Market price")),
     h("div", { id: "priceChart", class: "chart", role: "img", "aria-label": `Price history for ${row.name}` }),
     h("p", { class: "small-title", text: "Units on sale" }),
-    h("div", { id: "qtyChart", class: "chart", role: "img", "aria-label": `Units on sale for ${row.name}` })));
+    h("div", { id: "qtyChart", class: "chart", role: "img", "aria-label": `Units on sale for ${row.name}` }),
+    h("p", { class: "small-title", text: "Estimated units sold" }),
+    h("div", { id: "soldChart", class: "chart", role: "img", "aria-label": `Estimated units sold for ${row.name}` })));
   box.hidden = false;
   $("#layout").classList.add("split");
   drawItem();
@@ -553,7 +581,7 @@ async function loadHistory(id, range) {
   const shard = pad(id % S.meta.shards);
   const now = nowSec();
   const first = house.first || now;
-  const out = { t: [], low: [], market: [], qty: [], daily: range === "all" };
+  const out = { t: [], low: [], market: [], qty: [], sold: [], daily: range === "all" };
   const key = String(id);
 
   if (range === "all") {
@@ -568,16 +596,18 @@ async function loadHistory(id, range) {
       if (!flat) return;
       const [year, month] = months[i].split("-").map(Number);
       const rows = [];
-      for (let k = 0; k + 5 < flat.length; k += 6) rows.push(flat.slice(k, k + 6));
+      const n = doc.n || 6;                       // older files have no sales figure
+      for (let k = 0; k + n - 1 < flat.length; k += n) rows.push(flat.slice(k, k + n));
       rows.sort((a, b) => a[0] - b[0]);
       for (const r of rows) {
         out.t.push(Date.UTC(year, month - 1, r[0], 12) / 1000);
-        out.low.push(r[1]); out.market.push(r[3]); out.qty.push(r[4]);
+        out.low.push(r[1]); out.market.push(r[3]); out.qty.push(r[4]); out.sold.push(r[6] || 0);
       }
     });
     const cur = S.byId.get(id);                 // today so far
     if (cur && S.updated > (out.t[out.t.length - 1] || 0)) {
       out.t.push(S.updated); out.low.push(cur.low); out.market.push(cur.market); out.qty.push(cur.qty);
+      out.sold.push(null);                        // today is not finished
     }
     return out;
   }
@@ -594,7 +624,8 @@ async function loadHistory(id, range) {
     if (!doc) continue;
     const flat = doc.i[key] || [];
     const at = new Map();
-    for (let k = 0; k + 3 < flat.length; k += 4) at.set(flat[k], k);
+    const n = doc.n || 4;
+    for (let k = 0; k + n - 1 < flat.length; k += n) at.set(flat[k], k);
     doc.t.forEach((ts, idx) => {
       if (ts < from) return;
       const k = at.get(idx);
@@ -604,6 +635,7 @@ async function loadHistory(id, range) {
       out.low.push(k == null ? null : flat[k + 1]);
       out.market.push(k == null ? null : flat[k + 2]);
       out.qty.push(k == null ? 0 : flat[k + 3]);
+      out.sold.push(k == null || n < 5 ? 0 : flat[k + 4]);
     });
   }
   return out;
@@ -648,7 +680,11 @@ async function drawItem() {
   destroyCharts();
   priceBox.classList.remove("loading");
   qtyBox.classList.remove("loading");
-  const note = text => { priceBox.replaceChildren(h("p", { class: "chart-note", text })); qtyBox.replaceChildren(); };
+  const note = text => {
+    priceBox.replaceChildren(h("p", { class: "chart-note", text }));
+    qtyBox.replaceChildren();
+    $("#soldChart").replaceChildren();
+  };
   if (!hist) return note("The price history could not be loaded. Check your connection and pick the period again.");
   if (!hist.low.some(v => v != null)) {
     return note(range === "all" ? "No history yet. The first daily point appears after a full day of collecting."
@@ -689,22 +725,30 @@ async function drawItem() {
       tipRow("s1", moneyText(hist.low[idx]), "lowest"),
       tipRow("s2", moneyText(hist.market[idx]), "market"),
       tipRow(null, num(hist.qty[idx] || 0), hist.daily ? "units on sale, daily average" : "units on sale"),
+      hist.sold[idx] == null ? null : tipRow(null, num(hist.sold[idx]), hist.daily ? "sold that day, estimated" : "sold in the hour before, estimated"),
     ])],
   }, [hist.t, hist.low, hist.market], priceBox);
 
-  const qty = new uPlot({
+  const bars = (box, label, values, color) => new uPlot({
     width, height: 110, legend: { show: false },
     cursor: { sync, y: false, points: { show: false } },
     scales: { y: { range: (u, min, max) => [0, Math.max(1, max) * 1.1] } },
     axes: [xAxis, { ...axis, size: 58, values: (u, vals) => vals.map(n => Number.isInteger(n) ? num(n) : "") }],
-    series: [{}, { label: "Units on sale", stroke: v("--series-3"), fill: v("--series-3") + "8c", width: 1,
+    series: [{}, { label, stroke: v(color), fill: v(color) + "8c", width: 1,
       paths: uPlot.paths.bars({ size: [0.7, 24, 1] }), points: { show: false } }],
-  }, [hist.t, hist.qty], qtyBox);
+  }, [hist.t, values], box);
+  const qty = bars(qtyBox, "Units on sale", hist.qty, "--series-3");
+  const soldBox = $("#soldChart");
+  soldBox.replaceChildren();
+  const sold = bars(soldBox, "Estimated units sold", hist.sold, "--series-4");
 
-  S.charts = [price, qty];
+  S.charts = [price, qty, sold];
   S.observer = new ResizeObserver(() => {
     const w = priceBox.clientWidth;
-    if (w && w !== price.width) { price.setSize({ width: w, height: 230 }); qty.setSize({ width: w, height: 110 }); }
+    if (!w || w === price.width) return;
+    price.setSize({ width: w, height: 230 });
+    qty.setSize({ width: w, height: 110 });
+    sold.setSize({ width: w, height: 110 });
   });
   S.observer.observe(priceBox);
 }

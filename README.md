@@ -15,6 +15,8 @@ item, and publishes a static dashboard. There is no server and no database.
 - **Deals**: items listed well below their usual low for the past 7 days, with
   the margin left if you relist at the usual market price.
 - **Vendor flips**: items listed for less than a vendor pays.
+- **Volume**: estimated units and value sold in the past 24 hours, and how
+  long the current stock would last at that pace.
 - **Professions**: what each craft costs in materials, what the result sells
   for, and what is left after the auction cut. Open an item to see its recipe
   priced line by line.
@@ -46,6 +48,10 @@ old.
 
 - **Asking prices, not sales.** Blizzard only publishes current listings.
   Nothing here knows what actually sold.
+- **Sales are estimates.** Each snapshot is compared with the one before. A
+  listing that vanished with more time left than the gap between snapshots, or
+  whose quantity dropped, counts as sold. Cancelled auctions are counted too,
+  and listings bought close to expiry are not.
 - **Deals need history.** An item needs 24 hourly snapshots before it can
   appear under Deals.
 - **The API is undocumented.** Forever's endpoints were worked out by the
@@ -101,6 +107,7 @@ Everything lives on the `gh-pages` branch under `data/`, as small JSON files:
 | `<house>/summary.json` | One row per item listed now, with 7- and 30-day ranges |
 | `<house>/h/<date>/<shard>.json` | Hourly points, kept 30 days |
 | `<house>/d/<month>/<shard>.json` | Daily points, kept indefinitely |
+| `<house>/open.json.gz` | Listings of the last snapshot, for the next sales estimate |
 
 History is split into 64 shards by item id, so viewing an item downloads a few
 kilobytes. The branch is replaced with a single commit each hour, which keeps

@@ -243,8 +243,8 @@ def run_checks(keep: Path | None, days: float) -> int:
     monthly = list((data / "116" / "d").glob("*/*.json"))
     check(bool(monthly), f"daily files written: {len(monthly)}")
     sample = collect.read_json(monthly[0])
-    lens = {len(v) % 6 for v in sample["i"].values()}
-    check(lens == {0}, "daily rows are 6 numbers each")
+    lens = {len(v) % 7 for v in sample["i"].values()}
+    check(lens == {0}, "daily rows are 7 numbers each")
 
     summary = collect.read_json(data / "116" / "summary.json")
     cols = summary["cols"]
@@ -286,6 +286,29 @@ def run_checks(keep: Path | None, days: float) -> int:
     check(stats[5] == [150, 150, 2, 2, 1] and skipped == 4, f"stack buyout becomes a unit price: {stats.get(5)}")
     check(stats[9] == [40, 60, 100, 10, 2], f"market = cheapest 15% of units: {stats.get(9)}")
 
+    print("2b. Estimated sales")
+    prev = {"a": {"1": [5, 1, 2], "2": [5, 1, 0], "3": [6, 1, 1], "4": [7, 1, 2]},
+            "c": {"9": [8, 20, 2], "10": [8, 5, 1]}}
+    cur = {"a": {"4": [7, 1, 2]}, "c": {"9": [8, 12, 2]}}
+    check(collect.estimate_sold(prev, cur, 3600) == {5: 1, 6: 1, 8: 13},
+          f"hourly gap: long listings that vanish count, short ones do not: {collect.estimate_sold(prev, cur, 3600)}")
+    check(collect.estimate_sold(prev, cur, 5 * 3600) == {5: 1, 8: 8},
+          "longer gap: only listings with more than 8 hours left count")
+    check(collect.estimate_sold(prev, cur, 12 * 3600) == {8: 8}, "very long gap: only partial buys count")
+    book = collect.open_book([{"id": 1, "item": {"id": 5}, "quantity": 1, "buyout": 9, "time_left": "VERY_LONG"},
+                              {"id": 2, "item": {"id": 5}, "quantity": 1, "bid": 9, "time_left": "LONG"}],
+                             [{"id": 3, "item": {"id": 8}, "quantity": 4, "unit_price": 2, "time_left": "SHORT"}])
+    check(book == {"a": {"1": [5, 1, 2]}, "c": {"3": [8, 4, 0]}}, "bid-only listings stay out of the book")
+    check(len(cols) == 19 and all(r["sold1d"] >= 0 and r["sold7d"] >= r["sold1d"] for r in rows.values()),
+          "summary carries 24-hour and 7-day sales")
+    check(sum(r["sold7d"] for r in rows.values()) > 0, "simulated run produced sales")
+    check((data / "116" / "open.json.gz").exists() and bool(meta["houses"][0]["sales_since"]),
+          "last snapshot's listings saved for the next comparison")
+    hdoc = collect.read_json(sorted((data / "116" / "h").glob("*/*.json"))[-1])
+    check(hdoc["n"] == 5 and all(len(v) % 5 == 0 for v in hdoc["i"].values()), "hourly points are 5 numbers each")
+    old_doc = {"t": [1, 2], "i": {"7": [0, 10, 11, 3, 1, 12, 13, 4]}}
+    check(collect.widen(old_doc, 4, 5)["i"]["7"] == [0, 10, 11, 3, 0, 1, 12, 13, 4, 0], "older 4-number files are upgraded")
+
     print("3. Pruning old hourly data")
     old = collect.HOURLY_DAYS
     collect.HOURLY_DAYS = 3
@@ -294,7 +317,7 @@ def run_checks(keep: Path | None, days: float) -> int:
     left = collect.hourly_days(data / "116")
     check(len(left) <= 4, f"hourly folders trimmed to the window: {len(left)}")
     kept_days = {v[k] for v in collect.read_json(monthly[0])["i"].values()
-                 for k in range(0, len(v), 6)}
+                 for k in range(0, len(v), 7)}
     check(len(kept_days) >= min(int(days) - 1, 1), "daily history survives pruning")
     collect.HOURLY_DAYS = old
 

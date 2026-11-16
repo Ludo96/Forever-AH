@@ -10,6 +10,8 @@ small static data set that the dashboard reads:
     data/<house>/summary.json           one row per item listed right now
     data/<house>/h/<YYYY-MM-DD>/<shard>.json   hourly points, kept 30 days
     data/<house>/d/<YYYY-MM>/<shard>.json      daily points, kept forever
+    data/<house>/open.json.gz           the listings of the last snapshot, used
+                                        to estimate sales in the next one
     data/state.json                     collector bookkeeping
 
 The Forever API is undocumented, so every response is read defensively.
@@ -47,7 +49,11 @@ QUALITY = {"POOR": 0, "COMMON": 1, "UNCOMMON": 2, "RARE": 3, "EPIC": 4,
            "LEGENDARY": 5, "ARTIFACT": 6}
 SUMMARY_COLS = ["id", "low", "market", "qty", "near", "listings", "low24hAgo",
                 "low1dMed", "low7dMin", "low7dMed", "low7dMax", "market7dMed",
-                "points7d", "low30dMin", "low30dMed", "low30dMax", "points30d"]
+                "points7d", "low30dMin", "low30dMed", "low30dMax", "points30d",
+                "sold1d", "sold7d"]
+HOURLY_N = 5                # numbers per hourly point: tIndex, low, market, qty, sold
+DAILY_N = 7                 # per daily point: day, low, high, market, qty, hours, sold
+LEFT = {"LONG": 1, "VERY_LONG": 2}     # time_left values that rule out expiry
 
 
 class NotFound(Exception):
@@ -302,39 +308,120 @@ def aggregate(auctions: list, commodities: list) -> tuple[dict, int]:
     return stats, skipped
 
 
+# -------------------------------------------------------- sales estimate ----
+
+def open_book(auctions: list, commodities: list) -> dict:
+    """Every buyable listing by auction id: {"a"|"c": {id: [item, qty, left]}}.
+
+    `left` is 2 for more than 8 hours remaining, 1 for more than 2, else 0.
+    """
+    book = {"a": {}, "c": {}}
+    for kind, entries in (("a", auctions), ("c", commodities)):
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("id"), int):
+                continue
+            item = entry.get("item")
+            item_id = item.get("id") if isinstance(item, dict) else item
+            if not isinstance(item_id, int) or not (entry.get("buyout") or entry.get("unit_price")):
+                continue                # bid-only listings cannot be bought out
+            book[kind][str(entry["id"])] = [item_id, entry.get("quantity") or 1,
+                                            LEFT.get(entry.get("time_left"), 0)]
+    return book
+
+
+def estimate_sold(prev: dict, cur: dict, gap: int) -> dict:
+    """Units per item that left the auction house between two snapshots.
+
+    Blizzard publishes listings, not sales, so this is an estimate: a listing
+    that vanished while it still had more time left than the gap between the
+    snapshots cannot have expired, so it was bought (or cancelled, which looks
+    the same). A listing whose quantity dropped was partly bought. Listings
+    that vanish close to expiry are not counted.
+    """
+    need = 1 if gap <= 2 * 3600 else 2 if gap <= 8 * 3600 else 3
+    sold: dict[int, int] = defaultdict(int)
+    for kind in ("a", "c"):
+        now = cur.get(kind, {})
+        for auction_id, (item_id, qty, left) in prev.get(kind, {}).items():
+            still = now.get(auction_id)
+            if still is None:
+                if left >= need:
+                    sold[item_id] += qty
+            elif still[1] < qty:
+                sold[item_id] += qty - still[1]
+    return dict(sold)
+
+
+def read_book(house_dir: Path) -> dict | None:
+    try:
+        with gzip.open(house_dir / "open.json.gz", "rt", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError, EOFError):
+        return None
+
+
+def write_book(house_dir: Path, ts: int, book: dict) -> None:
+    house_dir.mkdir(parents=True, exist_ok=True)
+    with gzip.open(house_dir / "open.json.gz", "wt", encoding="utf-8", compresslevel=6) as fh:
+        json.dump({"ts": ts, **book}, fh, separators=(",", ":"))
+
+
 # -------------------------------------------------------------- storage ----
 
-def append_hourly(house_dir: Path, ts: int, stats: dict) -> None:
+def widen(doc: dict, old: int, new: int) -> dict:
+    """Upgrade a history file written before a field was added (pads with 0)."""
+    if doc.get("n", old) < new:
+        have = doc.get("n", old)
+        for key, flat in doc["i"].items():
+            out = []
+            for k in range(0, len(flat) - have + 1, have):
+                out.extend(flat[k:k + have] + [0] * (new - have))
+            doc["i"][key] = out
+        doc["n"] = new
+    return doc
+
+
+def append_hourly(house_dir: Path, ts: int, stats: dict, sold: dict | None = None) -> None:
     """Add one snapshot to today's hourly files.
 
-    File shape: {"t": [timestamps], "i": {id: [tIndex, low, market, qty, ...]}}
+    File shape: {"n": 5, "t": [timestamps],
+                 "i": {id: [tIndex, low, market, qty, sold, ...]}}
+    An item that sold out since the last snapshot gets a point with no price.
     """
+    sold = sold or {}
     day_dir = house_dir / "h" / utc_day(ts)
     by_shard: dict[int, dict] = defaultdict(dict)
     for item_id, row in stats.items():
-        by_shard[item_id % SHARDS][item_id] = row
+        by_shard[item_id % SHARDS][item_id] = [row[0], row[1], row[2], sold.get(item_id, 0)]
+    for item_id, units in sold.items():
+        if item_id not in stats and units > 0:
+            by_shard[item_id % SHARDS][item_id] = [None, None, 0, units]
     for shard, rows in by_shard.items():
         path = day_dir / f"{shard:02d}.json"
-        doc = read_json(path) or {"t": [], "i": {}}
+        doc = widen(read_json(path) or {"n": HOURLY_N, "t": [], "i": {}}, 4, HOURLY_N)
         idx = len(doc["t"])
         doc["t"].append(ts)
         for item_id, row in rows.items():
-            doc["i"].setdefault(str(item_id), []).extend([idx, row[0], row[1], row[2]])
+            doc["i"].setdefault(str(item_id), []).extend([idx, *row])
         write_json(path, doc)
 
 
 def load_shard_history(house_dir: Path, shard: int, days: list[str]) -> dict:
-    """{item id: [(ts, low, market, qty), ...]} for one shard, oldest first."""
+    """{item id: [(ts, low, market, qty, sold), ...]} for one shard, oldest first.
+
+    low and market are None on points where the item had sold out.
+    """
     hist: dict[int, list] = defaultdict(list)
     for day in days:
         doc = read_json(house_dir / "h" / day / f"{shard:02d}.json")
         if not doc:
             continue
+        widen(doc, 4, HOURLY_N)
         times = doc["t"]
         for key, flat in doc["i"].items():
             points = hist[int(key)]
-            for k in range(0, len(flat) - 3, 4):
-                points.append((times[flat[k]], flat[k + 1], flat[k + 2], flat[k + 3]))
+            for k in range(0, len(flat) - HOURLY_N + 1, HOURLY_N):
+                points.append((times[flat[k]], *flat[k + 1:k + HOURLY_N]))
     return hist
 
 
@@ -349,26 +436,29 @@ def hourly_days(house_dir: Path) -> list[str]:
 def roll_day(house_dir: Path, day: str) -> None:
     """Fold one finished UTC day into the monthly daily files.
 
-    File shape: {"i": {id: [dayOfMonth, low, high, market, qty, hours, ...]}}
+    File shape: {"n": 7, "i": {id: [dayOfMonth, low, high, market, qty, hours, sold, ...]}}
     """
     month, dom = day[:7], int(day[8:])
     for shard in range(SHARDS):
         doc = read_json(house_dir / "h" / day / f"{shard:02d}.json")
         if not doc:
             continue
+        widen(doc, 4, HOURLY_N)
         path = house_dir / "d" / month / f"{shard:02d}.json"
-        monthly = read_json(path) or {"i": {}}
+        monthly = widen(read_json(path) or {"n": DAILY_N, "i": {}}, 6, DAILY_N)
         for key, flat in doc["i"].items():
-            lows, markets, qtys = flat[1::4], flat[2::4], flat[3::4]
+            lows = [v for v in flat[1::HOURLY_N] if v is not None]
+            markets = [v for v in flat[2::HOURLY_N] if v is not None]
+            qtys, sold = flat[3::HOURLY_N], flat[4::HOURLY_N]
             if not lows:
                 continue
             old = monthly["i"].get(key, [])
             kept = []
-            for k in range(0, len(old) - 5, 6):
+            for k in range(0, len(old) - DAILY_N + 1, DAILY_N):
                 if old[k] != dom:
-                    kept.extend(old[k:k + 6])
+                    kept.extend(old[k:k + DAILY_N])
             kept.extend([dom, min(lows), max(lows), median(markets),
-                         round(sum(qtys) / len(qtys)), len(lows)])
+                         round(sum(qtys) / len(qtys)), len(lows), sum(sold)])
             monthly["i"][key] = kept
         write_json(path, monthly)
 
@@ -396,7 +486,10 @@ def build_summary(house_dir: Path, ts: int, stats: dict) -> list[list]:
     for shard, ids in by_shard.items():
         hist = load_shard_history(house_dir, shard, days)
         for item_id in ids:
-            points = hist.get(item_id) or [(ts, *stats[item_id][:3])]
+            every = hist.get(item_id) or []
+            sold1d = sum(p[4] for p in every if p[0] > ts - 86400)
+            sold7d = sum(p[4] for p in every if p[0] > ts - 7 * 86400)
+            points = [p for p in every if p[1] is not None] or [(ts, *stats[item_id][:3], 0)]
             w30 = [p for p in points if p[0] > ts - 30 * 86400] or points[-1:]
             w7 = [p for p in w30 if p[0] > ts - 7 * 86400] or w30[-1:]
             w1 = [p for p in w7 if p[0] > ts - 86400] or w7[-1:]
@@ -408,7 +501,8 @@ def build_summary(house_dir: Path, ts: int, stats: dict) -> list[list]:
                          median([p[1] for p in w1]),
                          min(lows7), median(lows7), max(lows7),
                          median([p[2] for p in w7]), len(w7),
-                         min(lows30), median(lows30), max(lows30), len(w30)])
+                         min(lows30), median(lows30), max(lows30), len(w30),
+                         sold1d, sold7d])
     rows.sort(key=lambda r: r[0])
     return rows
 
@@ -554,7 +648,14 @@ def run(api, out: Path, cfg: dict, now: int | None = None) -> dict:
             fresh = False                       # empty response: keep old data
 
         if fresh:
-            append_hourly(house_dir, ts, stats)
+            book = open_book(payload["auctions"], payload["commodities"])
+            prev = read_book(house_dir)
+            sold = {}
+            if prev and prev.get("ts") == last_ts and last_ts:
+                sold = estimate_sold(prev, book, ts - last_ts)
+                hs["sales_since"] = hs.get("sales_since") or ts
+            write_book(house_dir, ts, book)
+            append_hourly(house_dir, ts, stats, sold)
             hs["last_ts"] = ts
             hs["last_modified"] = modified
             hs["snapshots"] = hs.get("snapshots", 0) + 1
@@ -575,6 +676,7 @@ def run(api, out: Path, cfg: dict, now: int | None = None) -> dict:
             "cut": cuts.get(faction, 0.05), "ruleset": payload["ruleset"],
             "snapshot": hs.get("last_ts"), "first": hs.get("first_ts"),
             "snapshots": hs.get("snapshots", 0),
+            "sales_since": hs.get("sales_since"),
             "listings": len(payload["auctions"]) + len(payload["commodities"]),
             "items": len(stats)})
         log(f"house {hid} ({house['name']}): {len(stats)} items, "
