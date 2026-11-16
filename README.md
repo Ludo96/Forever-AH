@@ -54,9 +54,12 @@ old.
 - **Asking prices, not sales.** Blizzard only publishes current listings.
   Nothing here knows what actually sold.
 - **Sales are estimates.** Each snapshot is compared with the one before. A
-  listing that vanished with more time left than the gap between snapshots, or
-  whose quantity dropped, counts as sold. Cancelled auctions are counted too,
-  and listings bought close to expiry are not.
+  listing whose quantity dropped counts as partly sold. A listing that vanished
+  counts as sold only if it could not have expired and no cheaper listing of
+  the same item is still there, since buyers take the cheapest first. For gear
+  and other one-off items, reposted listings are subtracted. Cancelling the
+  cheapest listing still looks like a sale, so the figures are an upper
+  estimate.
 - **The signal is not a forecast.** It scores today's price against the past
   week: 60% distance from the usual low (30% away is the full swing), 40%
   position between the week's low and high. Above +0.5 reads Buy, below -0.5

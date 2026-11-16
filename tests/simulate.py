@@ -287,18 +287,25 @@ def run_checks(keep: Path | None, days: float) -> int:
     check(stats[9] == [40, 60, 100, 10, 2], f"market = cheapest 15% of units: {stats.get(9)}")
 
     print("2b. Estimated sales")
-    prev = {"a": {"1": [5, 1, 2], "2": [5, 1, 0], "3": [6, 1, 1], "4": [7, 1, 2]},
-            "c": {"9": [8, 20, 2], "10": [8, 5, 1]}}
-    cur = {"a": {"4": [7, 1, 2]}, "c": {"9": [8, 12, 2]}}
-    check(collect.estimate_sold(prev, cur, 3600) == {5: 1, 6: 1, 8: 13},
-          f"hourly gap: long listings that vanish count, short ones do not: {collect.estimate_sold(prev, cur, 3600)}")
+    # auctions: 1 and 3 vanish with time left, 2 vanishes near expiry, 4 stays.
+    # commodities of item 8: 9 is partly bought, 10 (the cheapest) vanishes,
+    # 11 vanishes although the cheaper 9 is still there, so it was cancelled.
+    prev = {"a": {"1": [5, 1, 2, 100], "2": [5, 1, 0, 100], "3": [6, 1, 1, 50], "4": [7, 1, 2, 70]},
+            "c": {"9": [8, 20, 2, 10], "10": [8, 5, 1, 9], "11": [8, 50, 2, 30]}}
+    cur = {"a": {"4": [7, 1, 2, 70]}, "c": {"9": [8, 12, 2, 10]}}
+    got = collect.estimate_sold(prev, cur, 3600)
+    check(got == {5: 1, 6: 1, 8: 13}, f"vanished cheap listings and partial buys count, dearer ones do not: {got}")
     check(collect.estimate_sold(prev, cur, 5 * 3600) == {5: 1, 8: 8},
           "longer gap: only listings with more than 8 hours left count")
     check(collect.estimate_sold(prev, cur, 12 * 3600) == {8: 8}, "very long gap: only partial buys count")
-    book = collect.open_book([{"id": 1, "item": {"id": 5}, "quantity": 1, "buyout": 9, "time_left": "VERY_LONG"},
+    relist = {"a": {"4": [7, 1, 2, 70], "20": [5, 1, 2, 95]}, "c": {"9": [8, 12, 2, 10]}}
+    check(collect.estimate_sold(prev, relist, 3600) == {6: 1, 8: 13}, "a reposted one-off item is not a sale")
+    check(collect.estimate_sold({"a": {"1": [5, 1, 2]}, "c": {}}, {"a": {}, "c": {}}, 3600) == {5: 1},
+          "books saved before prices were recorded still work")
+    book = collect.open_book([{"id": 1, "item": {"id": 5}, "quantity": 2, "buyout": 18, "time_left": "VERY_LONG"},
                               {"id": 2, "item": {"id": 5}, "quantity": 1, "bid": 9, "time_left": "LONG"}],
                              [{"id": 3, "item": {"id": 8}, "quantity": 4, "unit_price": 2, "time_left": "SHORT"}])
-    check(book == {"a": {"1": [5, 1, 2]}, "c": {"3": [8, 4, 0]}}, "bid-only listings stay out of the book")
+    check(book == {"a": {"1": [5, 2, 2, 9]}, "c": {"3": [8, 4, 0, 2]}}, "bid-only listings stay out of the book")
     check(len(cols) == 19 and all(r["sold1d"] >= 0 and r["sold7d"] >= r["sold1d"] for r in rows.values()),
           "summary carries 24-hour and 7-day sales")
     check(sum(r["sold7d"] for r in rows.values()) > 0, "simulated run produced sales")

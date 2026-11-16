@@ -54,6 +54,7 @@ SUMMARY_COLS = ["id", "low", "market", "qty", "near", "listings", "low24hAgo",
 HOURLY_N = 5                # numbers per hourly point: tIndex, low, market, qty, sold
 DAILY_N = 7                 # per daily point: day, low, high, market, qty, hours, sold
 LEFT = {"LONG": 1, "VERY_LONG": 2}     # time_left values that rule out expiry
+SALES_METHOD = 2            # raise to discard sales figures after changing the estimate
 
 
 class NotFound(Exception):
@@ -311,9 +312,10 @@ def aggregate(auctions: list, commodities: list) -> tuple[dict, int]:
 # -------------------------------------------------------- sales estimate ----
 
 def open_book(auctions: list, commodities: list) -> dict:
-    """Every buyable listing by auction id: {"a"|"c": {id: [item, qty, left]}}.
+    """Every buyable listing by auction id: {"a"|"c": {id: [item, qty, left, unit]}}.
 
     `left` is 2 for more than 8 hours remaining, 1 for more than 2, else 0.
+    `unit` is the buyout per unit in copper.
     """
     book = {"a": {}, "c": {}}
     for kind, entries in (("a", auctions), ("c", commodities)):
@@ -322,34 +324,78 @@ def open_book(auctions: list, commodities: list) -> dict:
                 continue
             item = entry.get("item")
             item_id = item.get("id") if isinstance(item, dict) else item
-            if not isinstance(item_id, int) or not (entry.get("buyout") or entry.get("unit_price")):
+            qty = entry.get("quantity") or 1
+            unit = entry.get("unit_price")
+            if unit is None and isinstance(entry.get("buyout"), int):
+                unit = entry["buyout"] // max(1, qty)
+            if not isinstance(item_id, int) or not isinstance(unit, int) or unit <= 0:
                 continue                # bid-only listings cannot be bought out
-            book[kind][str(entry["id"])] = [item_id, entry.get("quantity") or 1,
-                                            LEFT.get(entry.get("time_left"), 0)]
+            book[kind][str(entry["id"])] = [item_id, qty, LEFT.get(entry.get("time_left"), 0), unit]
     return book
 
 
 def estimate_sold(prev: dict, cur: dict, gap: int) -> dict:
-    """Units per item that left the auction house between two snapshots.
+    """Units per item that were probably bought between two snapshots.
 
-    Blizzard publishes listings, not sales, so this is an estimate: a listing
-    that vanished while it still had more time left than the gap between the
-    snapshots cannot have expired, so it was bought (or cancelled, which looks
-    the same). A listing whose quantity dropped was partly bought. Listings
-    that vanish close to expiry are not counted.
+    Blizzard publishes listings, not sales, so this is an estimate built from
+    what changed:
+
+    * A listing whose quantity dropped was partly bought. Always counted.
+    * A listing that vanished is counted only if it still had more time left
+      than the gap between the snapshots (so it cannot have expired) AND it
+      was not priced above a cheaper listing of the same item that is still
+      there. Buyers take the cheapest first, so a dearer listing vanishing
+      while a cheaper one stays was almost certainly cancelled.
+    * For one-of-a-kind auctions (gear, recipes), newly posted listings of the
+      same item are subtracted, because cancel-and-repost is the usual reason
+      those vanish.
+
+    Cancelling the cheapest listing still looks like a sale, so treat the
+    result as an upper estimate.
     """
     need = 1 if gap <= 2 * 3600 else 2 if gap <= 8 * 3600 else 3
     sold: dict[int, int] = defaultdict(int)
     for kind in ("a", "c"):
-        now = cur.get(kind, {})
-        for auction_id, (item_id, qty, left) in prev.get(kind, {}).items():
+        before, now = prev.get(kind, {}), cur.get(kind, {})
+        cheapest_left: dict[int, int] = {}
+        for auction_id, entry in before.items():
+            if auction_id in now and len(entry) > 3:
+                item_id, unit = entry[0], entry[3]
+                if unit < cheapest_left.get(item_id, unit + 1):
+                    cheapest_left[item_id] = unit
+        gone: dict[int, int] = defaultdict(int)
+        for auction_id, entry in before.items():
+            item_id, qty, left = entry[0], entry[1], entry[2]
+            unit = entry[3] if len(entry) > 3 else None
             still = now.get(auction_id)
-            if still is None:
-                if left >= need:
-                    sold[item_id] += qty
-            elif still[1] < qty:
-                sold[item_id] += qty - still[1]
-    return dict(sold)
+            if still is not None:
+                if still[1] < qty:
+                    sold[item_id] += qty - still[1]
+                continue
+            if left < need:
+                continue
+            floor = cheapest_left.get(item_id)
+            if unit is None or floor is None or unit <= floor * 1.05:
+                gone[item_id] += qty
+        if kind == "a":
+            for auction_id, entry in now.items():
+                if auction_id not in before and entry[0] in gone:
+                    gone[entry[0]] -= entry[1]
+        for item_id, units in gone.items():
+            if units > 0:
+                sold[item_id] += units
+    return {k: v for k, v in sold.items() if v > 0}
+
+
+def reset_sales(house_dir: Path) -> None:
+    """Zero the sales figures recorded so far (used when the method changes)."""
+    for path in (house_dir / "h").glob("*/*.json"):
+        doc = read_json(path)
+        if not doc or doc.get("n", 4) < HOURLY_N:
+            continue
+        for flat in doc["i"].values():
+            flat[4::HOURLY_N] = [0] * len(flat[4::HOURLY_N])
+        write_json(path, doc)
 
 
 def read_book(house_dir: Path) -> dict | None:
@@ -647,6 +693,11 @@ def run(api, out: Path, cfg: dict, now: int | None = None) -> dict:
         if not stats:
             fresh = False                       # empty response: keep old data
 
+        if hs.get("sales_method") != SALES_METHOD:
+            if hs.get("sales_since"):
+                reset_sales(house_dir)          # figures from an older method
+            hs["sales_method"] = SALES_METHOD
+            hs["sales_since"] = None
         if fresh:
             book = open_book(payload["auctions"], payload["commodities"])
             prev = read_book(house_dir)
