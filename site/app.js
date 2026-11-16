@@ -165,6 +165,8 @@ const COLS = {
   near: { label: "At this price", num: 1, cls: "hide-sm", cell: r => num(r.near), val: r => r.near },
   profit: { label: "Resale margin", num: 1, cell: r => money(r.profit), val: r => r.profit },
   sell: { label: "Vendor pays", num: 1, cls: "hide-sm", cell: r => money(r.sell), val: r => r.sell },
+  signal: { label: "Signal", cls: "hide-sm", val: r => r.sig ? r.sig.score : null,
+    cell: r => r.sig ? h("span", { class: `sig ${r.sig.tone}`, text: r.sig.label }) : h("span", { class: "dim", text: "–" }) },
   sold: { label: "Sold", num: 1, cell: r => num(r.sold1), val: r => r.sold1 },
   value: { label: "Value sold", num: 1, cell: r => money(r.value), val: r => r.value },
   stock: { label: "Stock lasts", num: 1, cls: "hide-sm", val: r => r.stock, first: 1,
@@ -209,13 +211,13 @@ const TABS = {
   },
   all: {
     label: "All items",
-    cols: ["star", "name", "low", "market", "change", "range", "qty"], sort: ["qty", -1],
+    cols: ["star", "name", "low", "market", "change", "range", "signal", "qty"], sort: ["qty", -1],
     rows: () => S.rows,
     blurb: () => "Everything on sale right now. Lowest is the cheapest buyout per unit; market averages the cheapest 15% of units, so one stray listing does not move it.",
   },
   watch: {
     label: "Watchlist",
-    cols: ["star", "name", "low", "market", "change", "range", "qty"], sort: ["name", 1],
+    cols: ["star", "name", "low", "market", "change", "range", "signal", "qty"], sort: ["name", 1],
     rows: () => [...S.watch].map(id => S.byId.get(id) || unlisted(id)),
     blurb: () => "Items you starred. Saved in this browser only.",
   },
@@ -361,6 +363,7 @@ async function loadHouse() {
   const hours = house.sales_since ? Math.min(24, Math.max(1, (S.updated - house.sales_since) / 3600 + 1)) : 0;
   S.salesHours = hours;
   for (const r of S.rows) {
+    r.sig = signal(r);
     r.value = r.sold1 ? r.sold1 * r.market : null;
     r.stock = r.sold1 && hours ? r.qty / (r.sold1 * 24 / hours) : null;       // days of supply
   }
@@ -491,6 +494,53 @@ function render() {
 
 /* --------------------------------------------------------------- detail -- */
 
+/* Buy / hold / sell signal: how today's lowest price compares with the item's
+   past 7 days. 60% is the distance from its usual low (30% away is the full
+   swing), 40% is where it sits between the week's low and high. It describes
+   the price now; it does not predict where the price goes next. */
+function signal(row) {
+  if (!row.listed || row.n7 < DEAL_MIN_POINTS || !row.m7) return null;
+  const versusUsual = Math.max(-1, Math.min(1, row.discount / 0.3));
+  const span = row.hi7 - row.lo7;
+  const inRange = span > 0 ? 1 - 2 * (row.low - row.lo7) / span : 0;
+  const score = 0.6 * versusUsual + 0.4 * inRange;
+  const [label, tone] = score >= 0.5 ? ["Buy", "buy"] : score >= 0.2 ? ["Lean buy", "buy"]
+    : score > -0.2 ? ["Hold", "hold"] : score > -0.5 ? ["Lean sell", "sell"] : ["Sell", "sell"];
+  const pct = Math.min(99, Math.abs(Math.round(row.discount * 100)));
+  const versus = pct < 5 ? `close to its usual low of ${moneyText(row.m7)}`
+    : `${pct}% ${row.discount > 0 ? "below" : "above"} its usual low of ${moneyText(row.m7)}`;
+  const where = span <= 0 ? "" : inRange > 0.5 ? ", near the bottom of its 7-day range"
+    : inRange < -0.5 ? ", near the top of its 7-day range" : ", mid-range for the week";
+  return { score, label, tone, why: `${versus[0].toUpperCase()}${versus.slice(1)}${where}.` };
+}
+
+function meter(row) {
+  const svg = (tag, attrs) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    return node;
+  };
+  const sig = row.sig === undefined ? signal(row) : row.sig;
+  const cx = 110, cy = 104, r = 84;
+  const at = (deg, rad) => [cx + rad * Math.cos(deg * Math.PI / 180), cy - rad * Math.sin(deg * Math.PI / 180)];
+  const dial = svg("svg", { viewBox: "0 0 220 122", class: "dial", "aria-hidden": "true" });
+  ["sell", "sell soft", "hold", "buy soft", "buy"].forEach((tone, i) => {
+    const [x1, y1] = at(180 - i * 36 - 1.5, r), [x2, y2] = at(180 - (i + 1) * 36 + 1.5, r);
+    dial.append(svg("path", { d: `M${x1} ${y1} A${r} ${r} 0 0 1 ${x2} ${y2}`, class: `arc ${tone}` }));
+  });
+  if (sig) {
+    const [nx, ny] = at(90 - sig.score * 90, r - 24);
+    dial.append(svg("line", { x1: cx, y1: cy, x2: nx, y2: ny, class: "needle" }), svg("circle", { cx, cy, r: 6, class: "hub" }));
+  }
+  const ends = h("div", { class: "dial-ends" }, h("span", { text: "Sell" }), h("span", { text: "Hold" }), h("span", { text: "Buy" }));
+  return h("div", { class: "meter", role: "img", "aria-label": sig ? `Signal: ${sig.label}. ${sig.why}` : "Signal: not enough history yet" },
+    h("div", { class: "dial-wrap" }, dial, ends),
+    h("div", { class: "meter-text" },
+      h("p", { class: `meter-label ${sig ? sig.tone : ""}`, text: sig ? sig.label : "No signal yet" }),
+      h("p", { class: "meter-why", text: sig ? sig.why : verdict(row) }),
+      h("p", { class: "meter-note", text: "Compares today's price with the past 7 days. It is not a forecast." })));
+}
+
 function verdict(row) {
   if (!row.listed) return "Not on sale right now. The chart shows its past listings.";
   if (row.n7 < DEAL_MIN_POINTS) return "Still gathering history, so there is no usual price to compare with yet.";
@@ -552,7 +602,7 @@ function renderDetail(keepCharts) {
     h("div", { class: "detail-head" },
       h("div", null, h("h2", { text: row.name }), h("p", { class: "kind", text: row.kind })),
       h("button", { class: "close", type: "button", "aria-label": "Close item details", text: "×", onclick: closeItem })),
-    h("p", { class: "verdict", text: verdict(row) }),
+    meter(row),
     h("div", { class: "actions" },
       h("button", { class: "quiet", type: "button", "aria-pressed": String(watched),
         text: watched ? "★ Watching" : "☆ Watch", onclick: () => toggleWatch(row.id) }),

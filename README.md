@@ -15,6 +15,8 @@ item, and publishes a static dashboard. There is no server and no database.
 - **Deals**: items listed well below their usual low for the past 7 days, with
   the margin left if you relist at the usual market price.
 - **Vendor flips**: items listed for less than a vendor pays.
+- **Buy / hold / sell signal**: a meter on every item page and a sortable
+  column, comparing today's lowest price with the item's past 7 days.
 - **Volume**: estimated units and value sold in the past 24 hours, and how
   long the current stock would last at that pace.
 - **Professions**: what each craft costs in materials, what the result sells
@@ -52,6 +54,10 @@ old.
   listing that vanished with more time left than the gap between snapshots, or
   whose quantity dropped, counts as sold. Cancelled auctions are counted too,
   and listings bought close to expiry are not.
+- **The signal is not a forecast.** It scores today's price against the past
+  week: 60% distance from the usual low (30% away is the full swing), 40%
+  position between the week's low and high. Above +0.5 reads Buy, below -0.5
+  Sell. It needs 24 hourly snapshots, like Deals.
 - **Deals need history.** An item needs 24 hourly snapshots before it can
   appear under Deals.
 - **The API is undocumented.** Forever's endpoints were worked out by the
