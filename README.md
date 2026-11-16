@@ -21,7 +21,8 @@ item, and publishes a static dashboard. There is no server and no database.
   long the current stock would last at that pace.
 - **Professions**: what each craft costs in materials, what the result sells
   for, and what is left after the auction cut. Open an item to see its recipe
-  priced line by line.
+  priced line by line, and its crafting cost charted against its price over
+  time.
 - **All items**: everything on sale, with the lowest price, market price,
   24-hour change, 7-day range and units on sale.
 - **Watchlist**: items you star. Saved in your own browser, so each friend

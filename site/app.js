@@ -644,7 +644,8 @@ function renderDetail(keepCharts) {
           onclick: () => { S.range = key; writeHash(); drawItem(); } })))),
     h("div", { class: "legend" },
       h("span", null, h("i", { class: "key s1" }), "Lowest price"),
-      h("span", null, h("i", { class: "key s2" }), "Market price")),
+      h("span", null, h("i", { class: "key s2" }), "Market price"),
+      recipesFor(row.id).length ? h("span", null, h("i", { class: "key s3" }), "Cost to craft") : null),
     h("div", { id: "priceChart", class: "chart", role: "img", "aria-label": `Price history for ${row.name}` }),
     h("p", { class: "small-title", text: "Units on sale" }),
     h("div", { id: "qtyChart", class: "chart", role: "img", "aria-label": `Units on sale for ${row.name}` }),
@@ -656,6 +657,42 @@ function renderDetail(keepCharts) {
 }
 
 /* --------------------------------------------------------------- charts -- */
+
+/* What one unit cost to craft at each point of `hist`: every material at its
+   market price then (or the vendor price when cheaper), divided by the yield.
+   A material keeps its last known price while it is off the market. */
+async function craftCost([, , lo, hi, flat], hist, range) {
+  const makes = (lo + hi) / 2;
+  const mats = [];
+  for (let k = 0; k < flat.length; k += 2) mats.push({ id: flat[k], count: flat[k + 1] });
+  await Promise.all(mats.map(async m => {
+    m.vendor = S.recipes.vendor[m.id];
+    m.hist = await loadHistory(m.id, range).catch(() => null);
+    m.at = 0;
+    m.last = null;
+  }));
+  if (!hist.t.length) {
+    // The crafted item was never on sale in this period: use the materials' timeline.
+    const all = new Set();
+    for (const m of mats) if (m.hist) m.hist.t.forEach(ts => all.add(ts));
+    hist.t = [...all].sort((a, b) => a - b);
+    for (const key of ["low", "market", "sold"]) hist[key] = hist.t.map(() => null);
+    hist.qty = hist.t.map(() => 0);
+  }
+  hist.cost = hist.t.map(ts => {
+    let total = 0;
+    for (const m of mats) {
+      while (m.hist && m.at < m.hist.t.length && m.hist.t[m.at] <= ts) {
+        if (m.hist.market[m.at] != null) m.last = m.hist.market[m.at];
+        m.at++;
+      }
+      const price = m.vendor == null ? m.last : m.last == null ? m.vendor : Math.min(m.last, m.vendor);
+      if (price == null) return null;
+      total += price * m.count;
+    }
+    return Math.round(total / makes);
+  });
+}
 
 async function loadHistory(id, range) {
   const house = currentHouse();
@@ -754,6 +791,8 @@ async function drawItem() {
   let hist;
   try {
     [hist] = await Promise.all([loadHistory(id, range), document.fonts ? document.fonts.ready : null]);
+    const recipe = recipesFor(id)[0];
+    if (recipe) await craftCost(recipe[1], hist, range);
   } catch {
     hist = null;
   }
@@ -767,7 +806,7 @@ async function drawItem() {
     $("#soldChart").replaceChildren();
   };
   if (!hist) return note("The price history could not be loaded. Check your connection and pick the period again.");
-  if (!hist.low.some(v => v != null)) {
+  if (![...hist.low, ...(hist.cost || [])].some(v => v != null)) {
     return note(range === "all" ? "No history yet. The first daily point appears after a full day of collecting."
       : "No listings in this period. Try a longer one.");
   }
@@ -800,15 +839,17 @@ async function drawItem() {
     axes: [xAxis, { ...axis, size: 58, values: (u, vals) => vals.map(axisMoney) }],
     series: [{},
       { label: "Lowest price", stroke: v("--series-1"), width: 2, spanGaps: true },
-      { label: "Market price", stroke: v("--series-2"), width: 2, spanGaps: true }],
+      { label: "Market price", stroke: v("--series-2"), width: 2, spanGaps: true },
+      ...(hist.cost ? [{ label: "Cost to craft", stroke: v("--series-3"), width: 2, dash: [6, 4], spanGaps: true }] : [])],
     plugins: [tipPlugin(idx => [
       h("div", { class: "when", text: when(idx) }),
       tipRow("s1", moneyText(hist.low[idx]), "lowest"),
       tipRow("s2", moneyText(hist.market[idx]), "market"),
+      hist.cost ? tipRow("s3", moneyText(hist.cost[idx]), "cost to craft") : null,
       tipRow(null, num(hist.qty[idx] || 0), hist.daily ? "units on sale, daily average" : "units on sale"),
       hist.sold[idx] == null ? null : tipRow(null, num(hist.sold[idx]), hist.daily ? "sold that day, estimated" : "sold in the hour before, estimated"),
     ])],
-  }, [hist.t, hist.low, hist.market], priceBox);
+  }, [hist.t, hist.low, hist.market, ...(hist.cost ? [hist.cost] : [])], priceBox);
 
   const bars = (box, label, values, color) => new uPlot({
     width, height: 110, legend: { show: false },
@@ -818,7 +859,7 @@ async function drawItem() {
     series: [{}, { label, stroke: v(color), fill: v(color) + "8c", width: 1,
       paths: uPlot.paths.bars({ size: [0.7, 24, 1] }), points: { show: false } }],
   }, [hist.t, values], box);
-  const qty = bars(qtyBox, "Units on sale", hist.qty, "--series-3");
+  const qty = bars(qtyBox, "Units on sale", hist.qty, "--bar");
   const soldBox = $("#soldChart");
   soldBox.replaceChildren();
   const sold = bars(soldBox, "Estimated units sold", hist.sold, "--series-4");
