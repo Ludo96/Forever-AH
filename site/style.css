@@ -60,6 +60,9 @@ button, input, select { font: inherit; color: inherit; }
   gap: 16px 32px; flex-wrap: wrap; }
 .status { color: var(--ink-2); margin-top: 6px; max-width: 60ch; }
 
+.refresh-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; min-height: 36px; }
+.refresh-row .quiet { padding: 4px 14px; }
+.quiet:disabled { opacity: .6; cursor: default; }
 .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px;
   overflow: hidden; background: var(--surface); }
 .seg button { background: none; border: 0; padding: 8px 16px; cursor: pointer;

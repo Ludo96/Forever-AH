@@ -289,7 +289,7 @@ async function boot() {
   } catch {
     $("#status").textContent = "No prices yet.";
     showEmpty("Waiting for the first snapshot",
-      "The collector has not published any data. It runs once an hour; if this message stays, check the Actions tab of the repository for a failed run.");
+      "The collector has not published any data. It checks for new prices every 20 minutes; if this message stays, check the Actions tab of the repository for a failed run.");
     return;
   }
   [S.items, S.recipes] = await Promise.all([
@@ -303,10 +303,41 @@ async function boot() {
   await loadHouse();
 }
 
+/* Fetch the newest published prices. A manual refresh adds a one-off query
+   string so a copy cached along the way cannot be served instead. */
+async function refresh(manual) {
+  const bust = manual ? `?t=${Date.now()}` : "";
+  const before = S.updated;
+  S.meta = await getJSON("data/meta.json" + bust, FRESH);
+  S.items = await getJSON("data/items.json" + bust, FRESH).catch(() => S.items);
+  S.bust = bust;
+  if (!S.meta.houses.some(x => x.id === S.house)) {
+    S.house = (S.meta.houses.find(x => x.faction === "horde") || S.meta.houses[0]).id;
+  }
+  await loadHouse();
+  return S.updated !== before;
+}
+
+async function refreshClicked() {
+  const button = $("#refresh"), note = $("#refresh-note");
+  button.disabled = true;
+  button.textContent = "Refreshing…";
+  try {
+    const changed = await refresh(true);
+    note.textContent = changed ? "New prices loaded." : "Already the latest. Blizzard updates about once an hour.";
+  } catch {
+    note.textContent = "Could not load prices. Check your connection and try again.";
+  }
+  button.disabled = false;
+  button.textContent = "Refresh";
+  clearTimeout(refreshClicked.timer);
+  refreshClicked.timer = setTimeout(() => { note.textContent = ""; }, 6000);
+}
+
 async function loadHouse() {
   const house = currentHouse();
   let doc = { cols: [], rows: [], updated: null };
-  try { doc = await getJSON(`data/${S.house}/summary.json`, FRESH); } catch { /* no snapshot yet */ }
+  try { doc = await getJSON(`data/${S.house}/summary.json${S.bust || ""}`, FRESH); } catch { /* no snapshot yet */ }
   const c = Object.fromEntries(doc.cols.map((name, i) => [name, i]));
   S.updated = doc.updated;
   S.rows = doc.rows.map(r => {
@@ -768,6 +799,10 @@ function bind() {
   document.addEventListener("keydown", e => { if (e.key === "Escape" && S.item != null) closeItem(); });
   window.addEventListener("hashchange", () => { readHash(); loadHouse(); });
   setInterval(() => { if (S.meta) renderChrome(); }, 60000);     // keep "refreshed n minutes ago" honest
+  $("#refresh").hidden = false;
+  $("#refresh").addEventListener("click", refreshClicked);
+  // Pick up new prices without a reload while the page is left open.
+  setInterval(() => { if (!document.hidden) refresh(false).catch(() => {}); }, 5 * 60000);
 }
 
 boot();

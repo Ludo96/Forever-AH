@@ -6,8 +6,8 @@ Blackwater house.
 
 **Dashboard:** https://ludo96.github.io/Forever-AH/
 
-It runs entirely on GitHub's free tier. A scheduled job pulls the current
-listings from Blizzard's API once an hour, boils them down to a few numbers per
+It runs entirely on GitHub's free tier. A scheduled job checks Blizzard's API every 20
+minutes (Blizzard refreshes its listings about hourly), boils them down to a few numbers per
 item, and publishes a static dashboard. There is no server and no database.
 
 ## What the dashboard shows

@@ -16,6 +16,10 @@
   <div class="top-title">
     <h1>Auction ledger</h1>
     <p id="status" class="status">Loading prices…</p>
+    <p class="refresh-row">
+      <button id="refresh" class="quiet" type="button" hidden>Refresh</button>
+      <span id="refresh-note" class="dim" role="status"></span>
+    </p>
   </div>
   <div id="houses" class="seg" role="group" aria-label="Auction house"></div>
 </header>
@@ -50,7 +54,7 @@
 </main>
 
 <footer class="foot">
-  <p>Prices come from current listings, not completed sales, so treat every figure as an asking price. Refreshed about once an hour from Blizzard's game data.</p>
+  <p>Prices come from current listings, not completed sales, so treat every figure as an asking price. Blizzard refreshes its data about once an hour; this page checks every 20 minutes.</p>
   <p id="footnote"></p>
 </footer>
 
