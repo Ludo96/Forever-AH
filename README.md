@@ -55,8 +55,12 @@ old.
   pin the right ids in `collector/config.json`:
 
   ```json
-  "houses": [116, 120]
+  "houses": [113, 116]
   ```
+
+  This is the current setting: 113 is the Horde house for EU PvP (confirmed
+  against in-game prices) and 116 is the Blackwater house in the same position
+  of Blizzard's list.
 
 - **Item names arrive gradually.** Forever's item data is missing a large share
   of auctionable items. The collector falls back to Classic Era data, looks up
