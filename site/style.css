@@ -185,6 +185,11 @@ td.tight, th.tight { padding-right: 0; width: 1%; }
 .spread tr { border: 0; cursor: default; }
 .spread tbody tr:hover { background: none; }
 
+.recipe { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+.recipe .kind { margin-top: 0; }
+.mats { list-style: none; padding: 0; margin: 6px 0 0; }
+.mats li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 3px 0; }
+.mats .sum { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 6px; color: var(--ink-2); }
 .chart-head { display: flex; justify-content: space-between; align-items: center; gap: 10px;
   flex-wrap: wrap; margin-top: 20px; }
 .chart-title { font-weight: 700; }

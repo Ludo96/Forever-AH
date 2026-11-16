@@ -11,6 +11,7 @@ const S = {
   meta: null, items: {}, house: null, updated: null,
   rows: [], byId: new Map(),
   tab: "deals", q: "", sort: {}, limit: 100, discount: 20,
+  recipes: null, prof: "Alchemy",
   item: null, range: "7d", watch: new Set(), charts: [], observer: null, drawId: 0,
 };
 
@@ -95,11 +96,13 @@ function readHash() {
   S.item = p.get("i") ? +p.get("i") : null;
   if (RANGES.some(r => r[0] === p.get("r"))) S.range = p.get("r");
   S.q = p.get("q") || "";
+  if (p.get("p")) S.prof = p.get("p");
 }
 function writeHash() {
   const p = new URLSearchParams();
   p.set("h", S.house);
   p.set("t", S.tab);
+  if (S.tab === "prof") p.set("p", S.prof);
   if (S.item != null) { p.set("i", S.item); p.set("r", S.range); }
   if (S.q) p.set("q", S.q);
   history.replaceState(null, "", "#" + p);
@@ -128,6 +131,7 @@ function nameCell(row) {
   return h("button", { class: "item", type: "button" },
     h("span", { class: `q q${row.quality}`, title: QUALITY[row.quality] || "" }),
     h("span", { text: row.name }),
+    row.makes && row.makes !== 1 ? h("span", { class: "sub", text: `makes ${row.makes}` }) : null,
     row.listed ? null : h("span", { class: "sub", text: "not listed" }));
 }
 function changeCell(row) {
@@ -161,6 +165,11 @@ const COLS = {
   near: { label: "At this price", num: 1, cls: "hide-sm", cell: r => num(r.near), val: r => r.near },
   profit: { label: "Resale margin", num: 1, cell: r => money(r.profit), val: r => r.profit },
   sell: { label: "Vendor pays", num: 1, cls: "hide-sm", cell: r => money(r.sell), val: r => r.sell },
+  skill: { label: "Skill", num: 1, cls: "hide-sm", always: 1, cell: r => String(r.skill), val: r => r.skill, first: 1 },
+  cost: { label: "Materials", num: 1, always: 1, cell: r => money(r.cost), val: r => r.cost },
+  sale: { label: "Sells for", num: 1, cls: "hide-sm", cell: r => money(r.low), val: r => r.low },
+  craft: { label: "Profit per craft", num: 1, always: 1, cell: r => money(r.craft), val: r => r.craft },
+  usual: { label: "At usual prices", num: 1, cls: "hide-sm", always: 1, cell: r => money(r.usual), val: r => r.usual },
   vprofit: { label: "Profit each", num: 1, cell: r => money(r.vprofit), val: r => r.vprofit },
 };
 
@@ -177,6 +186,12 @@ const TABS = {
     rows: () => S.rows.filter(r => r.vprofit > 0),
     blurb: () => "Listed for less than a vendor pays. Buy it, sell it to any vendor, keep the difference.",
   },
+  prof: {
+    label: "Professions",
+    cols: ["star", "name", "skill", "cost", "sale", "craft", "usual"], sort: ["craft", -1],
+    rows: craftRows,
+    blurb: () => `Material cost at current market prices (vendor price when cheaper), and what is left after selling at the lowest listing and paying the ${Math.round(currentHouse().cut * 100)}% auction cut. Recipes come from Wrath Classic data, so a few differ in Forever. Check the breakdown against the recipe in game before you buy.`,
+  },
   all: {
     label: "All items",
     cols: ["star", "name", "low", "market", "change", "range", "qty"], sort: ["qty", -1],
@@ -191,13 +206,60 @@ const TABS = {
   },
 };
 
+function nameOf(id) {
+  const it = S.items[id];
+  return it ? it[0] : (S.recipes && S.recipes.names[id]) || `Item ${id}`;
+}
+function qualityOf(id) {
+  const it = S.items[id];
+  if (it) return it[1];
+  return S.recipes && id in S.recipes.quality ? S.recipes.quality[id] : -1;
+}
 function unlisted(id) {
   const it = S.items[id];
-  return { id, listed: false, name: it ? it[0] : `Item ${id}`, quality: it ? it[1] : -1, n7: 0, n30: 0,
+  return { id, listed: false, name: nameOf(id), quality: qualityOf(id), n7: 0, n30: 0,
     sell: it ? it[5] : 0, kind: kindOf(it) };
 }
+
+/* Professions: what a craft costs in materials and what it leaves. */
+function matPrice(id, field) {
+  const row = S.byId.get(id);
+  const ah = row ? row[field] : null;
+  const vendor = S.recipes.vendor[id];
+  if (ah == null) return vendor == null ? null : vendor;
+  return vendor == null ? ah : Math.min(ah, vendor);
+}
+function craftRows() {
+  if (!S.recipes) return [];
+  const cut = currentHouse().cut;
+  return (S.recipes.professions[S.prof] || []).map(([id, skill, lo, hi, flat]) => {
+    const base = S.byId.get(id) || unlisted(id);
+    const makes = (lo + hi) / 2;
+    let cost = 0, usualCost = 0, complete = true;
+    for (let k = 0; k < flat.length; k += 2) {
+      const now = matPrice(flat[k], "market"), usual = matPrice(flat[k], "mk7");
+      if (now == null) { complete = false; break; }
+      cost += now * flat[k + 1];
+      usualCost += (usual == null ? now : usual) * flat[k + 1];
+    }
+    if (!complete && !base.listed) return null;       // nothing known about it in Forever
+    const steady = complete && base.listed && base.n7 >= DEAL_MIN_POINTS;
+    return { ...base, skill, makes,
+      cost: complete ? cost : null,
+      craft: complete && base.listed ? Math.round(base.low * makes * (1 - cut)) - cost : null,
+      usual: steady ? Math.round(base.m7 * makes * (1 - cut)) - usualCost : null };
+  }).filter(Boolean);
+}
+function recipesFor(id) {
+  const found = [];
+  if (!S.recipes) return found;
+  for (const [prof, list] of Object.entries(S.recipes.professions)) {
+    for (const rec of list) if (rec[0] === id) found.push([prof, rec]);
+  }
+  return found;
+}
 function kindOf(it) {
-  if (!it) return "No name from Blizzard yet";
+  if (!it) return "Blizzard has not published details for this item yet";
   const type = [it[3], it[2]].filter(Boolean).join(" ");
   return [QUALITY[it[1]], type.toLowerCase()].filter(Boolean).join(" ") + (it[4] ? `, item level ${it[4]}` : "");
 }
@@ -215,7 +277,10 @@ async function boot() {
       "The collector has not published any data. It runs once an hour; if this message stays, check the Actions tab of the repository for a failed run.");
     return;
   }
-  S.items = await getJSON("data/items.json", FRESH).catch(() => ({}));
+  [S.items, S.recipes] = await Promise.all([
+    getJSON("data/items.json", FRESH).catch(() => ({})),
+    getJSON("recipes.json").catch(() => null)]);
+  if (S.recipes && !(S.prof in S.recipes.professions)) S.prof = Object.keys(S.recipes.professions)[0];
   if (!S.meta.houses.some(x => x.id === S.house)) {
     S.house = (S.meta.houses.find(x => x.faction === "horde") || S.meta.houses[0]).id;
   }
@@ -234,7 +299,7 @@ async function loadHouse() {
     const low = r[c.low], m7 = r[c.low7dMed], mk7 = r[c.market7dMed], prev = r[c.low24hAgo];
     const sell = it ? it[5] : 0;
     return {
-      id, listed: true, name: it ? it[0] : `Item ${id}`, quality: it ? it[1] : -1, kind: kindOf(it),
+      id, listed: true, name: nameOf(id), quality: qualityOf(id), kind: kindOf(it),
       low, market: r[c.market], qty: r[c.qty], near: r[c.near], listings: r[c.listings],
       lo7: r[c.low7dMin], m7, hi7: r[c.low7dMax], mk7, n7: r[c.points7d],
       lo30: r[c.low30dMin], m30: r[c.low30dMed], hi30: r[c.low30dMax], n30: r[c.points30d],
@@ -286,7 +351,7 @@ function renderChrome() {
 function sortRows(rows, tab) {
   const [key, dir] = S.sort[S.tab] || tab.sort;
   const val = COLS[key].val;
-  const rank = r => { const v = r.listed === false && key !== "name" ? null : val(r); return v == null || Number.isNaN(v) ? null : v; };
+  const rank = r => { const v = r.listed === false && key !== "name" && !COLS[key].always ? null : val(r); return v == null || Number.isNaN(v) ? null : v; };
   return rows.slice().sort((a, b) => {
     const x = rank(a), y = rank(b);
     if (x == null || y == null) return (x == null) - (y == null);     // blanks last
@@ -302,6 +367,8 @@ function showEmpty(title, body) {
 function emptyMessage(q) {
   const house = currentHouse();
   if (q) return [`Nothing matches “${q}”`, "Check the spelling, or try the All items view."];
+  if (S.tab === "prof" && !S.recipes) return ["Recipes could not be loaded", "Reload the page to try again."];
+  if (S.tab === "prof") return ["No priced recipes yet", "None of this profession's materials or results are on sale right now."];
   if (S.tab === "watch") return ["Your watchlist is empty", "Star any item to keep it here. The list is saved in this browser only."];
   if (!S.rows.length) return ["No prices for this auction house yet", "The collector has not saved a snapshot for it. It runs about once an hour."];
   if (S.tab === "deals" && (house.snapshots || 0) < DEAL_MIN_POINTS) {
@@ -326,6 +393,10 @@ function render() {
     h("label", { for: "discount", text: "At least" }),
     h("select", { id: "discount", onchange: e => { S.discount = +e.target.value; render(); } },
       [10, 20, 30, 50].map(v => h("option", { value: v, selected: v === S.discount, text: `${v}% below usual` }))),
+  ] : S.tab === "prof" && S.recipes ? [
+    h("label", { for: "prof", text: "Profession" }),
+    h("select", { id: "prof", onchange: e => { S.prof = e.target.value; S.limit = 100; writeHash(); render(); } },
+      Object.keys(S.recipes.professions).map(name => h("option", { value: name, selected: name === S.prof, text: name }))),
   ] : []));
 
   const q = S.q.trim().toLowerCase();
@@ -350,7 +421,7 @@ function render() {
     class: row.id === S.item ? "on" : null, "data-id": row.id,
   }, tab.cols.map(key => {
     const col = COLS[key];
-    const blank = row.listed === false && !["star", "name"].includes(key);
+    const blank = row.listed === false && !["star", "name"].includes(key) && !col.always;
     return h("td", { class: [col.num && "num", col.cls].filter(Boolean).join(" ") },
       blank ? h("span", { class: "dim", text: "–" }) : col.cell(row));
   }))));
@@ -371,6 +442,35 @@ function verdict(row) {
   if (pct >= 10) return `${pct}% below its usual low of ${moneyText(row.m7)}.`;
   if (pct <= -10) return `${-pct}% above its usual low of ${moneyText(row.m7)}.`;
   return `Close to its usual low of ${moneyText(row.m7)}.`;
+}
+
+function openItem(id) {
+  S.item = id;
+  writeHash();
+  render();
+  renderDetail();
+}
+
+function recipeBlock([prof, [, skill, lo, hi, flat]]) {
+  const makes = lo === hi ? (lo > 1 ? `, makes ${lo}` : "") : `, makes ${lo} to ${hi}`;
+  const mats = [];
+  let total = 0, complete = true;
+  for (let k = 0; k < flat.length; k += 2) {
+    const id = flat[k], count = flat[k + 1], price = matPrice(id, "market");
+    const row = S.byId.get(id), vendor = S.recipes.vendor[id];
+    const fromVendor = price != null && vendor != null && (!row || vendor <= row.market);
+    if (price == null) complete = false; else total += price * count;
+    mats.push(h("li", null,
+      h("button", { class: "item", type: "button", onclick: () => openItem(id) },
+        h("span", { text: `${count} × ${nameOf(id)}` }),
+        fromVendor ? h("span", { class: "sub", text: "vendor" }) : null),
+      price == null ? h("span", { class: "dim", text: "not on sale" }) : money(price * count)));
+  }
+  return h("div", { class: "recipe" },
+    h("p", { class: "chart-title", text: `${prof} recipe` }),
+    h("p", { class: "kind", text: `Skill ${skill}${makes}` }),
+    h("ul", { class: "mats" }, mats,
+      h("li", { class: "sum" }, h("span", { text: complete ? "Materials" : "Materials on sale" }), money(total))));
 }
 
 function closeItem() {
@@ -407,6 +507,7 @@ function renderDetail(keepCharts) {
       fact("Market now", money(row.market)),
       fact("On sale", `${num(row.qty)} in ${num(row.listings)} listing${row.listings === 1 ? "" : "s"}`),
       row.sell ? fact("Vendor pays", money(row.sell)) : null) : null,
+    ...recipesFor(row.id).map(recipeBlock),
     row.listed && row.n7 > 1 ? h("table", { class: "spread" },
       h("thead", null, h("tr", null, h("th", null, h("span", { class: "sr", text: "Period" })),
         ...["Low", "Usual", "High"].map(t => h("th", { class: "num", scope: "col", text: t })))),
@@ -417,16 +518,17 @@ function renderDetail(keepCharts) {
           ...[row.lo30, row.m30, row.hi30].map(v => h("td", { class: "num" }, money(v)))) : null)) : null,
   ];
 
+  const parts = head.filter(Boolean);
   if (keepCharts && box.dataset.id === String(row.id) && $("#charts", box)) {
     // Only the header changed (watch toggled): keep the drawn charts in place.
     const charts = $("#charts", box);
-    box.replaceChildren(...head, charts);
+    box.replaceChildren(...parts, charts);
     return;
   }
 
   destroyCharts();
   box.dataset.id = row.id;
-  box.replaceChildren(...head, h("div", { id: "charts" },
+  box.replaceChildren(...parts, h("div", { id: "charts" },
     h("div", { class: "chart-head" },
       h("span", { class: "chart-title", text: "Price per unit" }),
       h("div", { class: "ranges", role: "group", "aria-label": "Chart period" },
@@ -617,10 +719,7 @@ function bind() {
   $("#table tbody").addEventListener("click", e => {
     const tr = e.target.closest("tr[data-id]");
     if (!tr) return;
-    S.item = +tr.dataset.id;
-    writeHash();
-    render();
-    renderDetail();
+    openItem(+tr.dataset.id);
   });
   document.addEventListener("keydown", e => { if (e.key === "Escape" && S.item != null) closeItem(); });
   window.addEventListener("hashchange", () => { readHash(); loadHouse(); });

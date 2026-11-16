@@ -15,6 +15,9 @@ item, and publishes a static dashboard. There is no server and no database.
 - **Deals**: items listed well below their usual low for the past 7 days, with
   the margin left if you relist at the usual market price.
 - **Vendor flips**: items listed for less than a vendor pays.
+- **Professions**: what each craft costs in materials, what the result sells
+  for, and what is left after the auction cut. Open an item to see its recipe
+  priced line by line.
 - **All items**: everything on sale, with the lowest price, market price,
   24-hour change, 7-day range and units on sale.
 - **Watchlist**: items you star. Saved in your own browser, so each friend
@@ -67,6 +70,11 @@ old.
   at most 1,500 new items per run, and retries unknown ones every few days.
 - **Random-suffix items share an id.** "of the Tiger" and "of the Bear"
   versions of the same base item are counted together.
+- **Recipes are borrowed.** Blizzard's Forever API has no recipe data, so the
+  Professions tab uses the open `wow-classic-items` dataset, which describes
+  recipes as they stood in Wrath Classic. Most old-world recipes match, a few
+  (flasks, for one) used different amounts originally, and anything Forever
+  added or changed is missing. Rebuild with `tools/build_recipes.py`.
 - **Auction cut.** Resale margins assume a 5% cut (15% at Blackwater), set in
   `collector/config.json`.
 
@@ -115,7 +123,8 @@ python3 -m http.server --directory public
 
 ## Credits
 
-Charts by [uPlot](https://github.com/leeoniya/uPlot) (MIT). Typeface: Alegreya
+Recipes from [wow-classic-items](https://github.com/nexus-devs/wow-classic-items)
+(MIT). Charts by [uPlot](https://github.com/leeoniya/uPlot) (MIT). Typeface: Alegreya
 and Alegreya Sans by Huerta Tipográfica (SIL Open Font License). Game data
 from Blizzard's Battle.net API. Not affiliated with or endorsed by Blizzard
 Entertainment.
