@@ -199,9 +199,18 @@ def simulate(out: Path, days: float, end: int, ruleset_info=True, cfg=None,
 
 
 def deal_price(api: FakeApi, item_id: int) -> int:
-    rows = [a["buyout"] for a in api._market(116)[0]
-            if a["item"]["id"] == item_id and "buyout" in a]
-    return min(rows) if rows else 5000
+    # The item is not listed every hour, so look back until it is.
+    now = api.now
+    try:
+        for back in range(48):
+            api.now = now - back * 3600
+            rows = [a["buyout"] for a in api._market(116)[0]
+                    if a["item"]["id"] == item_id and "buyout" in a]
+            if rows:
+                return min(rows)
+    finally:
+        api.now = now
+    return 50
 
 
 def check(cond, label):
