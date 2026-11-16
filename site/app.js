@@ -799,8 +799,8 @@ function bind() {
   document.addEventListener("keydown", e => { if (e.key === "Escape" && S.item != null) closeItem(); });
   window.addEventListener("hashchange", () => { readHash(); loadHouse(); });
   setInterval(() => { if (S.meta) renderChrome(); }, 60000);     // keep "refreshed n minutes ago" honest
-  $("#refresh").hidden = false;
-  $("#refresh").addEventListener("click", refreshClicked);
+  // Guarded: a browser can briefly pair a cached older page with this script.
+  if ($("#refresh")) $("#refresh").addEventListener("click", refreshClicked);
   // Pick up new prices without a reload while the page is left open.
   setInterval(() => { if (!document.hidden) refresh(false).catch(() => {}); }, 5 * 60000);
 }

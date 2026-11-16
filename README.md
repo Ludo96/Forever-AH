@@ -113,6 +113,11 @@ History is split into 64 shards by item id, so viewing an item downloads a few
 kilobytes. The branch is replaced with a single commit each hour, which keeps
 the repository from growing with every snapshot.
 
+## Changing the dashboard
+
+Browsers cache `app.js` and `style.css`. After editing either, raise the
+`?v=` number on both links in `site/index.html` so visitors get the new files.
+
 ## Testing
 
 ```
