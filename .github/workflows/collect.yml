@@ -1,0 +1,57 @@
+name: Collect auction prices
+
+on:
+  schedule:
+    - cron: "7 * * * *"          # hourly, at seven minutes past
+  workflow_dispatch:              # "Run workflow" button in the Actions tab
+  push:
+    branches: [main]
+    paths:
+      - "collector/**"
+      - "site/**"
+      - ".github/workflows/collect.yml"
+
+permissions:
+  contents: write                 # needed to publish to the gh-pages branch
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the published data
+        run: |
+          if git ls-remote --exit-code --heads "$REMOTE" gh-pages >/dev/null; then
+            git clone --quiet --depth 1 --branch gh-pages "$REMOTE" public
+          else
+            mkdir public
+            git -C public init --quiet --initial-branch gh-pages
+            git -C public remote add origin "$REMOTE"
+          fi
+
+      - name: Collect a snapshot
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+        run: python3 collector/collect.py --out public
+
+      - name: Publish the dashboard
+        run: |
+          cp -r site/. public/
+          cd public
+          # One commit only: the branch is replaced each hour, so the
+          # repository does not grow with every snapshot.
+          git checkout --quiet --orphan publish
+          git add -A
+          git -c user.name="Forever-AH collector" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "Prices as of $(date -u +'%Y-%m-%d %H:%M') UTC"
+          git push --quiet --force origin publish:gh-pages

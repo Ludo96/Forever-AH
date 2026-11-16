@@ -1,0 +1,7 @@
+{
+  "region": "eu",
+  "ruleset": 1,
+  "factions": ["horde", "blackwater"],
+  "houses": "auto",
+  "auction_cut": {"horde": 0.05, "alliance": 0.05, "blackwater": 0.15}
+}
