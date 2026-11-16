@@ -42,7 +42,10 @@ item, and publishes a static dashboard. There is no server and no database.
 4. **Turn on the site.** Settings → Pages → Source: *Deploy from a branch* →
    Branch: `gh-pages`, folder `/ (root)` → Save.
 
-After that it looks after itself. If a run fails, GitHub emails the repository
+After that it looks after itself. The schedule asks GitHub for a run every 20
+minutes, and as a backup each run also starts the next one 18 minutes after it
+finishes, because GitHub's scheduler can be late or skip runs. If the chain
+ever stops, start it again with Run workflow. If a run fails, GitHub emails the repository
 owner, and the dashboard shows a warning once prices are more than three hours
 old.
 
