@@ -379,7 +379,8 @@ def run_checks(keep: Path | None, days: float) -> int:
             "/data/wow/profession/333": {"skill_tiers": [{"name": "Enchanting", "id": 2946}]},
             "/data/wow/profession/165/skill-tier/2945": {"categories": [{"name": "Armor Kits", "recipes": [
                 {"name": "Thick Armor Kit", "id": 5667}, {"name": "Mystic Thick Armor Kit", "id": 55135},
-                {"name": "New Trainer Kit", "id": 60000}, {"name": "Gone", "id": 60001}]}]},
+                {"name": "New Trainer Kit", "id": 60000}, {"name": "Gone", "id": 60001},
+                {"name": "Trainer Only A", "id": 60002}, {"name": "Trainer Only B", "id": 60003}]}]},
             "/data/wow/profession/333/skill-tier/2946": {"categories": [{"name": "Enchant", "recipes": [{"name": "Enchant Chest", "id": 7000}]}]},
             "/data/wow/recipe/5667": {"crafted_item": {"name": "Thick Armor Kit", "id": 8173}, "crafted_quantity": {"value": 1.0},
                 "reagents": [{"reagent": {"name": "Thick Leather", "id": 4304}, "quantity": 5}, {"reagent": {"name": "Silken Thread", "id": 4291}, "quantity": 1}]},
@@ -387,16 +388,26 @@ def run_checks(keep: Path | None, days: float) -> int:
                 "reagents": [{"reagent": {"name": "Thick Armor Kit", "id": 8173}, "quantity": 1}, {"reagent": {"name": "Vision Dust", "id": 11137}, "quantity": 2}]},
             "/data/wow/recipe/60000": {"crafted_item": {"name": "New Trainer Kit", "id": 260000}, "crafted_quantity": {"value": 1.0},
                 "reagents": [{"reagent": {"name": "Pristine Hide", "id": 249428}, "quantity": 2}]},
+            "/data/wow/recipe/60002": {"crafted_item": {"name": "Trainer Only A", "id": 260002}, "crafted_quantity": {"value": 1.0},
+                "reagents": [{"reagent": {"name": "Pristine Hide", "id": 249428}, "quantity": 1}]},
+            "/data/wow/recipe/60003": {"crafted_item": {"name": "Trainer Only B", "id": 260003}, "crafted_quantity": {"value": 1.0},
+                "reagents": [{"reagent": {"name": "Pristine Hide", "id": 249428}, "quantity": 1}]},
             "/data/wow/recipe/7000": {"name": "Enchant Chest", "reagents": [{"reagent": {"name": "Strange Dust", "id": 10940}, "quantity": 1}]},
             "/data/wow/item/252999": {"preview_item": {"requirements": {"skill": {"profession": {"name": "Leatherworking", "id": 165}, "level": 210}},
                 "recipe": {"item": {"item": {"id": 252462}}}}},
             "/data/wow/item/14000": {"preview_item": {}},
+            "/data/wow/item/253000": {"preview_item": {"requirements": {"skill": {"profession": {"name": "Leatherworking", "id": 165}, "level": 290}},
+                "recipe": {"item": {"item": {"id": 260000}}}}},
         }
 
         def get(self, path, namespace, tries=4):
             if path not in self.docs:
                 raise collect.NotFound(path)
             return self.docs[path], {}
+
+        def search(self, path, params, namespace):       # one recipe item not seen on the AH
+            first = params["id"] == "[1,]"
+            return {"results": [{"data": {"id": 253000}}] if first else []}, {}
 
     cache = {}
     built = recipes.build(RecipeApi(), "eu",
@@ -405,13 +416,15 @@ def run_checks(keep: Path | None, days: float) -> int:
                            "8173": ["Thick Armor Kit", 1, "Consumable", "Permanent", 40, 1000, 0]},
                           {"skill": {"Leatherworking": {"8173": 200}}, "vendor": {"4291": 500}, "quality": {}}, cache, log=lambda m: None)
     lw = built["professions"].get("Leatherworking")
-    check(list(built["professions"]) == ["Leatherworking"] and len(lw) == 3, "recipes that make no item are left out")
+    check(list(built["professions"]) == ["Leatherworking"] and len(lw) == 5, "recipes that make no item are left out")
     check(lw[0] == [8173, 200, 1, 1, [4304, 5, 4291, 1]], f"old recipe takes its skill from Classic: {lw[0]}")
     check(lw[1] == [252462, 210, 1, 3, [8173, 1, 11137, 2]], f"new recipe takes its skill from the item that teaches it: {lw[1]}")
-    check(lw[2] == [260000, None, 1, 1, [249428, 2]], "a new trainer recipe has no skill level")
+    check(lw[2] == [260000, 290, 1, 1, [249428, 2]], "recipe items found by search supply skill levels too")
+    check(lw[3][1] is None and lw[4][1] is None, "a new trainer recipe has no skill level and sorts last")
     check(built["vendor"] == {"4291": 500} and built["names"]["252462"] == "Mystic Thick Armor Kit" and built["official"],
           "vendor prices and names carried over")
-    check(cache == {"252999": [252462, "Leatherworking", 210], "14000": []}, "recipe items are only read once")
+    check(cache == {"252999": [252462, "Leatherworking", 210], "14000": [], "253000": [260000, "Leatherworking", 290]},
+          "recipe items are only read once")
 
     print("\nall checks passed" if not check.failed else f"\n{check.failed} check(s) FAILED")
     return 1 if check.failed else 0

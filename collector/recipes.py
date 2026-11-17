@@ -5,10 +5,11 @@
     materials, amount made)
 
 Blizzard's recipe records do not say what skill a recipe needs, so that comes
-from two places: the recipe item that teaches it (Pattern, Plans, Formula...),
-when one has been seen on the auction house, and otherwise the original
-Classic value for the same profession and item (collector/classic.json). New
-trainer-taught recipes can therefore have no skill level.
+from two places: the recipe item that teaches it (Pattern, Plans, Formula...;
+every one is found through Blizzard's item search and read once), and
+otherwise the original Classic value for the same profession and item
+(collector/classic.json). New trainer-taught recipes can therefore have no
+skill level.
 
 Runs after the collector and rebuilds at most once a day. Any failure leaves
 the previous file in place and only warns, so prices keep publishing.
@@ -27,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from collect import Api, ApiError, NotFound, read_json, text, write_json  # noqa: E402
 
 REBUILD_AFTER = 24 * 3600
+VERSION = 2                     # raise to force a rebuild after changing this script
+RECIPE_CLASS = 9                # Blizzard's item class for Pattern, Plans, Formula...
 MAX_ITEM_LOOKUPS = 2500         # recipe items read per run
 
 
@@ -49,9 +52,33 @@ def fetch_all(api, paths: list[str], namespace: str) -> tuple[dict, int]:
     return docs, failed
 
 
+def recipe_item_ids(api, namespace: str) -> list[str]:
+    """Every recipe item Blizzard knows, by paging its item search in id order.
+
+    The search returns at most 1,000 results per query, so each page starts
+    after the last id of the one before.
+    """
+    found, after = [], 0
+    for _ in range(40):
+        doc, _ = api.search("/data/wow/search/item", {
+            "item_class.id": RECIPE_CLASS, "orderby": "id", "_pageSize": 1000,
+            "id": f"[{after + 1},]"}, namespace)
+        ids = [r["data"]["id"] for r in doc.get("results") or [] if isinstance((r.get("data") or {}).get("id"), int)]
+        if not ids:
+            break
+        found += [str(i) for i in ids]
+        after = max(ids)
+    return found
+
+
 def taught_by_items(api, namespace: str, items: dict, cache: dict, limit: int) -> None:
     """Read recipe items not looked at yet: cache[item id] = [made item, profession, skill]."""
-    todo = [i for i, v in items.items() if v[2] == "Recipe" and i not in cache][:limit]
+    known = [i for i, v in items.items() if v[2] == "Recipe"]
+    try:
+        known = sorted(set(known) | set(recipe_item_ids(api, namespace)), key=int)
+    except (ApiError, NotFound, KeyError):
+        pass                                        # no search: use the ones seen on the auction house
+    todo = [i for i in known if i not in cache][:limit]
     docs, _ = fetch_all(api, [f"/data/wow/item/{i}" for i in todo], namespace)
     for path, doc in docs.items():
         preview = doc.get("preview_item") or {}
@@ -110,6 +137,7 @@ def build(api, region: str, items: dict, classic: dict, item_cache: dict, log=pr
         amount = doc.get("crafted_quantity") or {}
         low = amount.get("minimum", amount.get("value", 1)) or 1
         high = amount.get("maximum", amount.get("value", low)) or low
+        low, high = (int(v) if float(v).is_integer() else v for v in (low, high))
         skill = taught.get((prof, made["id"]))
         if skill is None:
             skill = classic["skill"].get(prof, {}).get(str(made["id"]))
@@ -119,12 +147,15 @@ def build(api, region: str, items: dict, classic: dict, item_cache: dict, log=pr
         quality[str(made["id"])] = known[1] if known else classic["quality"].get(str(made["id"]), 1)
         professions.setdefault(prof, []).append([made["id"], skill, low, high, flat])
 
+    # Blizzard's index also carries a test profession and a few stubs.
+    professions = {name: rows for name, rows in professions.items()
+                   if len(rows) >= 5 and "[" not in name and "test" not in name.lower()}
     for rows in professions.values():
         rows.sort(key=lambda r: (r[1] is None, r[1] or 0, r[0]))
     total = sum(len(v) for v in professions.values())
     log(f"recipes: {total} from Blizzard across {len(professions)} professions, "
         f"{no_skill} without a skill level, {failed} unreadable")
-    return {"official": True, "built": int(time.time()),
+    return {"official": True, "built": int(time.time()), "version": VERSION,
             "source": "Blizzard Forever profession data",
             "names": names, "quality": quality, "vendor": vendor,
             "professions": dict(sorted(professions.items()))}
@@ -139,7 +170,8 @@ def main() -> int:
     data = Path(args.out) / "data"
     target = data / "recipes.json"
     old = read_json(target)
-    if old and not args.force and time.time() - old.get("built", 0) < REBUILD_AFTER:
+    if (old and not args.force and old.get("version") == VERSION
+            and time.time() - old.get("built", 0) < REBUILD_AFTER):
         print("recipes: up to date")
         return 0
     try:

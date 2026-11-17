@@ -102,6 +102,11 @@ class Api:
         query = urllib.parse.urlencode({"namespace": namespace, "locale": "en_GB"})
         return self._get_url(f"{self.host}{path}?{query}", tries)
 
+    def search(self, path: str, params: dict, namespace: str):
+        """GET a search endpoint. Returns (json, headers)."""
+        query = urllib.parse.urlencode({**params, "namespace": namespace, "locale": "en_GB"})
+        return self._get_url(f"{self.host}{path}?{query}", 4)
+
     def get_href(self, href: str, tries: int = 4):
         """GET a link the API handed back (already carries its namespace)."""
         if not href.startswith(self.host):
