@@ -24,6 +24,8 @@ def trim(obj, depth=0):
 
 api = collect.Api("eu", os.environ["BLIZZARD_CLIENT_ID"].strip(), os.environ["BLIZZARD_CLIENT_SECRET"].strip())
 for arg in sys.argv[1:]:
+    # PATH!ITEM keeps only the auctions of that item, untrimmed
+    arg, _, only = arg.partition("!")
     path, _, namespace = arg.partition("@")
     namespace = namespace or "static-forever-eu"
     try:
@@ -31,6 +33,12 @@ for arg in sys.argv[1:]:
             doc, _ = api._get_url(f"{api.host}{path}&namespace={namespace}&locale=en_GB", 2)
         else:
             doc, _ = api.get(path, namespace, tries=2)
+        if only:
+            hits = [a for a in doc.get("auctions") or [] if (a.get("item") or {}).get("id") == int(only)]
+            print(f"== {path} [{namespace}] item {only}: {len(hits)} auctions")
+            for a in hits[:15]:
+                print(json.dumps(a, ensure_ascii=False))
+            continue
         print(f"== {path} [{namespace}]\n{json.dumps(trim(doc), ensure_ascii=False)[:3500]}")
     except collect.NotFound:
         print(f"== {path} [{namespace}]\n404")
