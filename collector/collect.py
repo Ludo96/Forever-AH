@@ -52,9 +52,10 @@ SUMMARY_COLS = ["id", "low", "market", "qty", "near", "listings", "low24hAgo",
                 "low1dMed", "low7dMin", "low7dMed", "low7dMax", "market7dMed",
                 "points7d", "low30dMin", "low30dMed", "low30dMax", "points30d",
                 "sold1d", "sold7d",
-                "buyHour", "buyPct", "sellHour", "sellPct", "peakHour", "hourDays"]
+                "buyHour", "buyPct", "sellHour", "sellPct", "peakHour", "hourDays",
+                "soldPrice", "soldAt"]
 HOUR_MIN_DAYS = 3           # days an hour needs before it can be an item's best hour
-HOURLY_N = 5                # numbers per hourly point: tIndex, low, market, qty, sold
+HOURLY_N = 6                # per hourly point: tIndex, low, market, qty, sold, soldPrice
 DAILY_N = 7                 # per daily point: day, low, high, market, qty, hours, sold
 LEFT = {"LONG": 1, "VERY_LONG": 2}     # time_left values that rule out expiry
 SALES_METHOD = 2            # raise to discard sales figures after changing the estimate
@@ -342,7 +343,7 @@ def open_book(auctions: list, commodities: list) -> dict:
     return book
 
 
-def estimate_sold(prev: dict, cur: dict, gap: int) -> dict:
+def estimate_sold(prev: dict, cur: dict, gap: int, paid: dict | None = None) -> dict:
     """Units per item that were probably bought between two snapshots.
 
     Blizzard publishes listings, not sales, so this is an estimate built from
@@ -360,7 +361,11 @@ def estimate_sold(prev: dict, cur: dict, gap: int) -> dict:
 
     Cancelling the cheapest listing still looks like a sale, so treat the
     result as an upper estimate.
+
+    If `paid` is given it is filled with the average price per unit those
+    sales went for, {item: copper}.
     """
+    spent: dict[int, float] = defaultdict(float)
     need = 1 if gap <= 2 * 3600 else 2 if gap <= 8 * 3600 else 3
     sold: dict[int, int] = defaultdict(int)
     for kind in ("a", "c"):
@@ -372,6 +377,8 @@ def estimate_sold(prev: dict, cur: dict, gap: int) -> dict:
                 if unit < cheapest_left.get(item_id, unit + 1):
                     cheapest_left[item_id] = unit
         gone: dict[int, int] = defaultdict(int)
+        worth: dict[int, float] = defaultdict(float)     # copper asked for the vanished units
+        gross: dict[int, int] = defaultdict(int)         # vanished units before reposts are netted out
         for auction_id, entry in before.items():
             item_id, qty, left = entry[0], entry[1], entry[2]
             unit = entry[3] if len(entry) > 3 else None
@@ -379,12 +386,15 @@ def estimate_sold(prev: dict, cur: dict, gap: int) -> dict:
             if still is not None:
                 if still[1] < qty:
                     sold[item_id] += qty - still[1]
+                    spent[item_id] += (qty - still[1]) * (unit or 0)
                 continue
             if left < need:
                 continue
             floor = cheapest_left.get(item_id)
             if unit is None or floor is None or unit <= floor * 1.05:
                 gone[item_id] += qty
+                worth[item_id] += qty * (unit or 0)
+                gross[item_id] += qty
         if kind == "a":
             for auction_id, entry in now.items():
                 if auction_id not in before and entry[0] in gone:
@@ -392,6 +402,9 @@ def estimate_sold(prev: dict, cur: dict, gap: int) -> dict:
         for item_id, units in gone.items():
             if units > 0:
                 sold[item_id] += units
+                spent[item_id] += worth[item_id] * units / gross[item_id]
+    if paid is not None:
+        paid.update({k: round(spent[k] / v) for k, v in sold.items() if v > 0 and spent[k] > 0})
     return {k: v for k, v in sold.items() if v > 0}
 
 
@@ -399,10 +412,12 @@ def reset_sales(house_dir: Path) -> None:
     """Zero the sales figures recorded so far (used when the method changes)."""
     for path in (house_dir / "h").glob("*/*.json"):
         doc = read_json(path)
-        if not doc or doc.get("n", 4) < HOURLY_N:
+        if not doc or doc.get("n", 4) < 5:
             continue
+        widen(doc, 4, HOURLY_N)
         for flat in doc["i"].values():
             flat[4::HOURLY_N] = [0] * len(flat[4::HOURLY_N])
+            flat[5::HOURLY_N] = [0] * len(flat[5::HOURLY_N])
         write_json(path, doc)
 
 
@@ -435,21 +450,25 @@ def widen(doc: dict, old: int, new: int) -> dict:
     return doc
 
 
-def append_hourly(house_dir: Path, ts: int, stats: dict, sold: dict | None = None) -> None:
+def append_hourly(house_dir: Path, ts: int, stats: dict, sold: dict | None = None,
+                  paid: dict | None = None) -> None:
     """Add one snapshot to today's hourly files.
 
-    File shape: {"n": 5, "t": [timestamps],
-                 "i": {id: [tIndex, low, market, qty, sold, ...]}}
-    An item that sold out since the last snapshot gets a point with no price.
+    File shape: {"n": 6, "t": [timestamps],
+                 "i": {id: [tIndex, low, market, qty, sold, soldPrice, ...]}}
+    soldPrice is the average price per unit the sold units went for (0 when
+    nothing sold). An item that sold out since the last snapshot gets a point
+    with no listing price.
     """
-    sold = sold or {}
+    sold, paid = sold or {}, paid or {}
     day_dir = house_dir / "h" / utc_day(ts)
     by_shard: dict[int, dict] = defaultdict(dict)
     for item_id, row in stats.items():
-        by_shard[item_id % SHARDS][item_id] = [row[0], row[1], row[2], sold.get(item_id, 0)]
+        by_shard[item_id % SHARDS][item_id] = [row[0], row[1], row[2], sold.get(item_id, 0),
+                                               paid.get(item_id, 0)]
     for item_id, units in sold.items():
         if item_id not in stats and units > 0:
-            by_shard[item_id % SHARDS][item_id] = [None, None, 0, units]
+            by_shard[item_id % SHARDS][item_id] = [None, None, 0, units, paid.get(item_id, 0)]
     for shard, rows in by_shard.items():
         path = day_dir / f"{shard:02d}.json"
         doc = widen(read_json(path) or {"n": HOURLY_N, "t": [], "i": {}}, 4, HOURLY_N)
@@ -596,6 +615,20 @@ def best_hours(price: list, count: list, sold: list, snaps: list[int]) -> list:
     return out
 
 
+def last_sale(points: list, ts: int) -> list:
+    """[price, when] for an item's recent sales, or blanks.
+
+    The price is the average per unit over the sales of the past 24 hours, or
+    of the most recent hour with a sale if there were none in that time.
+    """
+    sales = [p for p in points if p[4] and p[5]]
+    if not sales:
+        return [None, None]
+    recent = [p for p in sales if p[0] > ts - 86400] or sales[-1:]
+    units = sum(p[4] for p in recent)
+    return [round(sum(p[4] * p[5] for p in recent) / units), sales[-1][0]]
+
+
 def build_summary(house_dir: Path, ts: int, stats: dict, since: int | None = None):
     """One row per item listed right now, with its recent range (SUMMARY_COLS).
 
@@ -646,7 +679,8 @@ def build_summary(house_dir: Path, ts: int, stats: dict, since: int | None = Non
                          min(lows7), median(lows7), max(lows7),
                          median([p[2] for p in w7]), len(w7),
                          min(lows30), median(lows30), max(lows30), len(w30),
-                         sold1d, sold7d, *best_hours(price, count, sold, snaps)])
+                         sold1d, sold7d, *best_hours(price, count, sold, snaps),
+                         *last_sale(every, ts)])
         write_json(house_dir / "p" / f"{shard:02d}.json", {"i": profiles})
     seen = {r[0] for r in rows}
     for item_id in stats:                        # brand-new items with no history file yet
@@ -654,7 +688,7 @@ def build_summary(house_dir: Path, ts: int, stats: dict, since: int | None = Non
             low = stats[item_id][0]
             rows.append([item_id, *stats[item_id], None, low, low, low, low,
                          stats[item_id][1], 1, low, low, low, 1, 0, 0,
-                         None, None, None, None, None, 0])
+                         None, None, None, None, None, 0, None, None])
     rows.sort(key=lambda r: r[0])
     level = [statistics.median(v) if len(v) >= 20 else None for v in levels]
     known = [v for v in level if v is not None]
@@ -813,12 +847,12 @@ def run(api, out: Path, cfg: dict, now: int | None = None) -> dict:
         if fresh:
             book = open_book(payload["auctions"], payload["commodities"])
             prev = read_book(house_dir)
-            sold = {}
+            sold, paid = {}, {}
             if prev and prev.get("ts") == last_ts and last_ts:
-                sold = estimate_sold(prev, book, ts - last_ts)
+                sold = estimate_sold(prev, book, ts - last_ts, paid)
                 hs["sales_since"] = hs.get("sales_since") or ts
             write_book(house_dir, ts, book)
-            append_hourly(house_dir, ts, stats, sold)
+            append_hourly(house_dir, ts, stats, sold, paid)
             hs["last_ts"] = ts
             hs["last_modified"] = modified
             hs["snapshots"] = hs.get("snapshots", 0) + 1

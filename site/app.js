@@ -196,9 +196,15 @@ const COLS = {
   skill: { label: "Skill", num: 1, cls: "hide-sm", always: 1, val: r => r.skill, first: 1,
     cell: r => r.skill == null ? h("span", { class: "dim", title: "Blizzard does not publish the skill for this recipe", text: "?" }) : String(r.skill) },
   cost: { label: "Materials", num: 1, always: 1, cell: r => money(r.cost), val: r => r.cost },
-  sale: { label: "Sells for", num: 1, cls: "hide-sm", cell: r => money(r.low), val: r => r.low },
-  craft: { label: "Profit per craft", num: 1, always: 1, cell: r => money(r.craft), val: r => r.craft },
-  usual: { label: "At usual prices", num: 1, cls: "hide-sm", always: 1, cell: r => money(r.usual), val: r => r.usual },
+  soldFor: { label: "Sold for", num: 1, cls: "hide-sm", always: 1, val: r => r.sale,
+    cell: r => r.sale == null ? h("span", { class: "dim", text: "no sales seen" })
+      : h("span", null, money(r.sale), r.saleNote ? h("span", { class: "sub", text: ` ${r.saleNote}` }) : null) },
+  sold24: { label: "Sold in 24 hours", num: 1, always: 1, val: r => r.sold1 || null,
+    cell: r => r.sold1 ? num(r.sold1) : h("span", { class: "dim", text: "–" }) },
+  craft: { label: "Profit per craft", num: 1, always: 1, val: r => r.craft,
+    cell: r => r.craft == null ? h("span", { class: "dim", text: "–" }) : money(r.craft) },
+  perDay: { label: "Profit per day", num: 1, cls: "hide-sm", always: 1, val: r => r.perDay,
+    cell: r => r.perDay == null ? h("span", { class: "dim", text: "–" }) : money(r.perDay) },
   vprofit: { label: "Profit each", num: 1, cell: r => money(r.vprofit), val: r => r.vprofit },
 };
 
@@ -218,7 +224,7 @@ const TABS = {
   },
   prof: {
     label: "Professions",
-    cols: ["star", "name", "skill", "cost", "sale", "craft", "usual"], sort: ["craft", -1],
+    cols: ["star", "name", "skill", "cost", "soldFor", "sold24", "craft", "perDay"], sort: ["craft", -1],
     rows: () => craftRows(),
     blurb: () => {
       const cut = Math.round(currentHouse().cut * 100);
@@ -226,7 +232,7 @@ const TABS = {
         ? "Recipes come from Blizzard's Forever data. Skill levels come from the items that teach each recipe or from original Classic, so a few new recipes show ? and are never filtered out."
         : "Recipes come from Wrath Classic data, so a few differ in Forever. Check the breakdown against the recipe in game before you buy.";
       const mine = S.skill[S.prof] ? ` Showing recipes that need ${S.prof} skill ${S.skill[S.prof]} or lower.` : "";
-      return `Material cost at current market prices (vendor price when cheaper), and what is left after selling at the lowest listing and paying the ${cut}% auction cut. ${source}${mine}`;
+      return `Profit is the price the item actually sold for in the past 24 hours (its most recent sale if none), less the ${cut}% auction cut and today's material cost at market price, or vendor price when cheaper. Items never seen selling have no profit and sort last. Profit per day is that margin times the units sold in a day. ${source}${mine}`;
     },
   },
   volume: {
@@ -289,19 +295,23 @@ function craftRows(prof = S.prof) {
   return (S.recipes.professions[prof] || []).filter(rec => rec[1] <= mine).map(([id, skill, lo, hi, flat]) => {
     const base = S.byId.get(id) || unlisted(id);
     const makes = (lo + hi) / 2;
-    let cost = 0, usualCost = 0, complete = true;
+    let cost = 0, complete = true;
     for (let k = 0; k < flat.length; k += 2) {
-      const now = matPrice(flat[k], "market"), usual = matPrice(flat[k], "mk7");
+      const now = matPrice(flat[k], "market");
       if (now == null) { complete = false; break; }
       cost += now * flat[k + 1];
-      usualCost += (usual == null ? now : usual) * flat[k + 1];
     }
     if (!complete && !base.listed) return null;       // nothing known about it in Forever
-    const steady = complete && base.listed && base.n7 >= DEAL_MIN_POINTS;
-    return { ...base, skill, makes,
-      cost: complete ? cost : null,
-      craft: complete && base.listed ? Math.round(base.low * makes * (1 - cut)) - cost : null,
-      usual: steady ? Math.round(base.m7 * makes * (1 - cut)) - usualCost : null };
+    // Profit is what the item actually sold for, less today's material cost.
+    // Sales seen before prices were recorded fall back to the lowest listing.
+    const sale = base.soldPrice || (base.sold1 > 0 ? base.low : null);
+    const age = base.soldAt ? S.updated - base.soldAt : 0;
+    const craft = complete && sale != null ? Math.round(sale * makes * (1 - cut)) - cost : null;
+    return { ...base, skill, makes, sale,
+      saleNote: !base.soldPrice && sale != null ? "listing" : age > 86400 ? `${Math.round(age / 86400)}d ago` : null,
+      cost: complete ? cost : null, craft,
+      // what crafting everything that sold in a day would have made
+      perDay: craft != null && base.sold1 > 0 && S.salesHours ? Math.round(craft * base.sold1 * 24 / S.salesHours / makes) : null };
   }).filter(Boolean);
 }
 function recipesFor(id) {
@@ -561,6 +571,7 @@ async function loadHouse() {
       profit: Math.round(mk7 * (1 - house.cut)) - low,
       vprofit: sell ? sell - low : null,
       buyHour: r[c.buyHour], buyPct: r[c.buyPct], sellHour: r[c.sellHour], sellPct: r[c.sellPct],
+      soldPrice: r[c.soldPrice] || null, soldAt: r[c.soldAt] || null,
       peakHour: r[c.peakHour], swing: r[c.buyHour] == null ? null : r[c.buyPct] + r[c.sellPct],
     };
   });
@@ -852,6 +863,7 @@ function renderDetail(keepCharts) {
       fact("Market now", money(row.market)),
       fact("On sale", `${num(row.qty)} in ${num(row.listings)} listing${row.listings === 1 ? "" : "s"}`),
       row.sold1 != null && S.salesHours ? fact(S.salesHours >= 24 ? "Sold in 24 hours" : `Sold in ${Math.round(S.salesHours)} hours`, `about ${num(row.sold1)}`) : null,
+      row.soldPrice ? fact("Last sold for", money(row.soldPrice)) : null,
       row.sell ? fact("Vendor pays", money(row.sell)) : null) : null,
     ...recipesFor(row.id).map(recipeBlock),
     row.listed && row.n7 > 1 ? h("table", { class: "spread" },

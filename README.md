@@ -17,8 +17,9 @@ item, and publishes a static dashboard. There is no server and no database.
 - **Deals**: items listed well below their usual low for the past 7 days, with
   the margin left if you relist at the usual market price. Items listed below
   vendor price sit behind a button here.
-- **Professions**: what each craft costs in materials, what the result sells
-  for, and what is left after the auction cut. Enter your skill level to see
+- **Professions**: what each craft costs in materials today, what the result
+  actually sold for, the profit per craft after the auction cut, and the
+  profit per day at the pace it sells. Items never seen selling sort last. Enter your skill level to see
   only what you can craft (saved per profession in your browser). Open an item
   to see its recipe priced line by line, and its crafting cost charted against
   its price over time.
@@ -71,6 +72,9 @@ old.
   only once at least 18 hours of the day have been seen on 3 different days,
   and the pick is smoothed with its neighbouring hours. Under two weeks of
   history a pattern can still be coincidence.
+- **Sold prices are asking prices that got taken.** When a listing counts as
+  sold, its buyout per unit is recorded as the sale price. Crafting profit uses
+  the average of those over the past 24 hours, or the most recent sale.
 - **The signal is not a forecast.** It scores today's price against the past
   week: 60% distance from the usual low (30% away is the full swing), 40%
   position between the week's low and high. Above +0.5 reads Buy, below -0.5

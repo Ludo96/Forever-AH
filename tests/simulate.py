@@ -306,15 +306,30 @@ def run_checks(keep: Path | None, days: float) -> int:
                               {"id": 2, "item": {"id": 5}, "quantity": 1, "bid": 9, "time_left": "LONG"}],
                              [{"id": 3, "item": {"id": 8}, "quantity": 4, "unit_price": 2, "time_left": "SHORT"}])
     check(book == {"a": {"1": [5, 2, 2, 9]}, "c": {"3": [8, 4, 0, 2]}}, "bid-only listings stay out of the book")
-    check(len(cols) == 25 and all(r["sold1d"] >= 0 and r["sold7d"] >= r["sold1d"] for r in rows.values()),
+    check(len(cols) == 27 and all(r["sold1d"] >= 0 and r["sold7d"] >= r["sold1d"] for r in rows.values()),
           "summary carries 24-hour and 7-day sales")
     check(sum(r["sold7d"] for r in rows.values()) > 0, "simulated run produced sales")
     check((data / "116" / "open.json.gz").exists() and bool(meta["houses"][0]["sales_since"]),
           "last snapshot's listings saved for the next comparison")
     hdoc = collect.read_json(sorted((data / "116" / "h").glob("*/*.json"))[-1])
-    check(hdoc["n"] == 5 and all(len(v) % 5 == 0 for v in hdoc["i"].values()), "hourly points are 5 numbers each")
+    check(hdoc["n"] == 6 and all(len(v) % 6 == 0 for v in hdoc["i"].values()), "hourly points are 6 numbers each")
+    paid = {}
+    collect.estimate_sold(prev, cur, 3600, paid)
+    check(paid == {5: 100, 6: 50, 8: round((8 * 10 + 5 * 9) / 13)}, f"sold units carry the price they went for: {paid}")
+    paid = {}
+    collect.estimate_sold({"a": {"1": [5, 1, 2, 100], "2": [5, 1, 2, 102], "3": [5, 1, 2, 104]}, "c": {}},
+                          {"a": {"9": [5, 1, 2, 99]}, "c": {}}, 3600, paid)
+    check(paid == {5: 102}, f"reposts are netted out of the price too: {paid}")
+    check(collect.last_sale([(100, 5, 5, 1, 2, 40), (200, 5, 5, 1, 0, 0), (90000, 5, 5, 1, 6, 80), (90500, 5, 5, 1, 2, 100)], 91000)
+          == [85, 90500], "last sale price averages the past 24 hours of sales")
+    check(collect.last_sale([(100, 5, 5, 1, 2, 40)], 500000) == [40, 100] and collect.last_sale([(1, 5, 5, 1, 3, 0)], 9) == [None, None],
+          "an older sale is used when nothing sold today; sales without a price are ignored")
+    priced = [r for r in rows.values() if r["soldPrice"]]
+    check(len(priced) > 10 and all(r["soldAt"] <= summary["updated"] for r in priced), f"summary carries sale prices: {len(priced)}")
     old_doc = {"t": [1, 2], "i": {"7": [0, 10, 11, 3, 1, 12, 13, 4]}}
-    check(collect.widen(old_doc, 4, 5)["i"]["7"] == [0, 10, 11, 3, 0, 1, 12, 13, 4, 0], "older 4-number files are upgraded")
+    check(collect.widen(old_doc, 4, 6)["i"]["7"] == [0, 10, 11, 3, 0, 0, 1, 12, 13, 4, 0, 0], "older 4-number files are upgraded")
+    five = {"n": 5, "t": [1], "i": {"7": [0, 10, 11, 3, 2]}}
+    check(collect.widen(five, 4, 6)["i"]["7"] == [0, 10, 11, 3, 2, 0], "5-number files keep their sales when upgraded")
 
     print("2c. Hour-of-day profiles")
     timed = [r for r in rows.values() if r["buyHour"] is not None]
