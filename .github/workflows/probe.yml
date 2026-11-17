@@ -1,0 +1,26 @@
+name: Probe the API
+
+# Manual only. Prints what Blizzard's API returns for the given paths, to work
+# out undocumented Forever endpoints. Does not change any data.
+on:
+  workflow_dispatch:
+    inputs:
+      paths:
+        description: Space-separated API paths, each optionally followed by @namespace
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+          PATHS: ${{ inputs.paths }}
+        run: python3 tools/probe.py $PATHS
