@@ -306,7 +306,7 @@ def run_checks(keep: Path | None, days: float) -> int:
                               {"id": 2, "item": {"id": 5}, "quantity": 1, "bid": 9, "time_left": "LONG"}],
                              [{"id": 3, "item": {"id": 8}, "quantity": 4, "unit_price": 2, "time_left": "SHORT"}])
     check(book == {"a": {"1": [5, 2, 2, 9]}, "c": {"3": [8, 4, 0, 2]}}, "bid-only listings stay out of the book")
-    check(len(cols) == 19 and all(r["sold1d"] >= 0 and r["sold7d"] >= r["sold1d"] for r in rows.values()),
+    check(len(cols) == 25 and all(r["sold1d"] >= 0 and r["sold7d"] >= r["sold1d"] for r in rows.values()),
           "summary carries 24-hour and 7-day sales")
     check(sum(r["sold7d"] for r in rows.values()) > 0, "simulated run produced sales")
     check((data / "116" / "open.json.gz").exists() and bool(meta["houses"][0]["sales_since"]),
@@ -315,6 +315,31 @@ def run_checks(keep: Path | None, days: float) -> int:
     check(hdoc["n"] == 5 and all(len(v) % 5 == 0 for v in hdoc["i"].values()), "hourly points are 5 numbers each")
     old_doc = {"t": [1, 2], "i": {"7": [0, 10, 11, 3, 1, 12, 13, 4]}}
     check(collect.widen(old_doc, 4, 5)["i"]["7"] == [0, 10, 11, 3, 0, 1, 12, 13, 4, 0], "older 4-number files are upgraded")
+
+    print("2c. Hour-of-day profiles")
+    timed = [r for r in rows.values() if r["buyHour"] is not None]
+    check(len(timed) > 150, f"items get a best hour to buy and sell: {len(timed)}")
+    check(all(0 <= r["buyHour"] < 24 and 0 <= r["sellHour"] < 24 and r["buyPct"] >= 0 and r["sellPct"] >= 0
+              for r in timed), "best hours are valid and on the right side of the daily average")
+    # the simulation prices every item 8% up and down over the day, so the
+    # typical gap between an item's dearest and cheapest hour is well above zero
+    swing = sorted(r["buyPct"] + r["sellPct"] for r in timed)[len(timed) // 2]
+    check(8 < swing < 30, f"typical daily swing matches the simulated rhythm: {swing:.1f}%")
+    check(any(r["peakHour"] is not None for r in timed), "busiest selling hour found")
+    hours = summary["hours"]
+    check(len(hours["traded"]) == 24 and sum(hours["traded"]) > 0 and min(hours["snapshots"]) >= 7,
+          "market-wide gold traded by hour")
+    check(all(v is not None and 0.8 < v < 1.25 for v in hours["price"]), "market-wide price level by hour")
+    prof = collect.read_json(data / "116" / "p" / "07.json")["i"]
+    check(bool(prof) and all(len(v) == 49 for v in prof.values()), "per-item hour profiles written")
+    pr, cn, sd = collect.hour_profile(
+        [(d * 86400 + h * 3600 + 1140, 100 + (20 if h == 20 else -20 if h == 4 else 0), 100, 5, 3 if h == 21 else 0)
+         for d in range(4) for h in range(24)], [4] * 24, 0)
+    check(collect.best_hours(pr, cn, sd, [4] * 24) == [4, 10.0, 20, 10.0, 20, 4],
+          f"cheapest, dearest and busiest hour picked out: {collect.best_hours(pr, cn, sd, [4] * 24)}")
+    check(collect.best_hours(*collect.hour_profile(
+        [(h * 3600, 100, 100, 5, 0) for h in range(24)], [1] * 24, 0), [1] * 24)[:5] == [None] * 5,
+          "one day of history names no best hour")
 
     print("3. Pruning old hourly data")
     old = collect.HOURLY_DAYS

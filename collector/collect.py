@@ -10,6 +10,7 @@ small static data set that the dashboard reads:
     data/<house>/summary.json           one row per item listed right now
     data/<house>/h/<YYYY-MM-DD>/<shard>.json   hourly points, kept 30 days
     data/<house>/d/<YYYY-MM>/<shard>.json      daily points, kept forever
+    data/<house>/p/<shard>.json         each item's price and sales by hour of day
     data/<house>/open.json.gz           the listings of the last snapshot, used
                                         to estimate sales in the next one
     data/state.json                     collector bookkeeping
@@ -50,7 +51,9 @@ QUALITY = {"POOR": 0, "COMMON": 1, "UNCOMMON": 2, "RARE": 3, "EPIC": 4,
 SUMMARY_COLS = ["id", "low", "market", "qty", "near", "listings", "low24hAgo",
                 "low1dMed", "low7dMin", "low7dMed", "low7dMax", "market7dMed",
                 "points7d", "low30dMin", "low30dMed", "low30dMax", "points30d",
-                "sold1d", "sold7d"]
+                "sold1d", "sold7d",
+                "buyHour", "buyPct", "sellHour", "sellPct", "peakHour", "hourDays"]
+HOUR_MIN_DAYS = 3           # days an hour needs before it can be an item's best hour
 HOURLY_N = 5                # numbers per hourly point: tIndex, low, market, qty, sold
 DAILY_N = 7                 # per daily point: day, low, high, market, qty, hours, sold
 LEFT = {"LONG": 1, "VERY_LONG": 2}     # time_left values that rule out expiry
@@ -452,7 +455,8 @@ def append_hourly(house_dir: Path, ts: int, stats: dict, sold: dict | None = Non
         write_json(path, doc)
 
 
-def load_shard_history(house_dir: Path, shard: int, days: list[str]) -> dict:
+def load_shard_history(house_dir: Path, shard: int, days: list[str],
+                       stamps: set | None = None) -> dict:
     """{item id: [(ts, low, market, qty, sold), ...]} for one shard, oldest first.
 
     low and market are None on points where the item had sold out.
@@ -464,6 +468,8 @@ def load_shard_history(house_dir: Path, shard: int, days: list[str]) -> dict:
             continue
         widen(doc, 4, HOURLY_N)
         times = doc["t"]
+        if stamps is not None:
+            stamps.update(times)
         for key, flat in doc["i"].items():
             points = hist[int(key)]
             for k in range(0, len(flat) - HOURLY_N + 1, HOURLY_N):
@@ -522,17 +528,104 @@ def roll_and_prune(house_dir: Path, house_state: dict, now: int) -> None:
     house_state["rolled"] = sorted(d for d in rolled if d >= cutoff)
 
 
-def build_summary(house_dir: Path, ts: int, stats: dict) -> list[list]:
-    """One row per item listed right now, with its recent range (SUMMARY_COLS)."""
+def hour_profile(points: list, snaps: list[int], since: int):
+    """How an item's price and sales vary across the 24 hours of the (UTC) day.
+
+    price[h]  how the low in hour h compares with the item's average across
+              the day (1.0 = average, 0.95 = 5% cheaper). Each snapshot is
+              first divided by that day's median low so a rising or falling
+              week does not leak in; days with fewer than 12 priced snapshots
+              are left out
+    count[h]  how many days contributed to price[h]
+    sold[h]   average units sold during hour h, over the snapshots since sales
+              counting began. A snapshot reports the hour before it, so sales
+              are filed under the hour of (snapshot time - 30 minutes).
+    """
+    by_day: dict[int, list] = defaultdict(list)
+    for p in points:
+        if p[1] is not None:
+            by_day[p[0] // 86400].append(p)
+    total, count = [0.0] * 24, [0] * 24
+    for rows in by_day.values():
+        if len(rows) < 12:
+            continue
+        mid = statistics.median(r[1] for r in rows)
+        for r in rows:
+            hour = r[0] % 86400 // 3600
+            total[hour] += r[1] / mid
+            count[hour] += 1
+    price = [total[h] / count[h] if count[h] else None for h in range(24)]
+    known = [v for v in price if v is not None]
+    if known:
+        centre = sum(known) / len(known)
+        price = [None if v is None else v / centre for v in price]
+    units = [0] * 24
+    for p in points:
+        if p[4] and p[0] >= since:
+            units[(p[0] - 1800) % 86400 // 3600] += p[4]
+    sold = [units[h] / snaps[h] if snaps[h] else 0 for h in range(24)]
+    return price, count, sold
+
+
+def best_hours(price: list, count: list, sold: list, snaps: list[int]) -> list:
+    """[buyHour, buyPct, sellHour, sellPct, peakHour, days] or blanks.
+
+    Only hours seen on at least HOUR_MIN_DAYS days count, and at least 18 of
+    the 24 must qualify, so one odd day cannot name the best hour.
+    """
+    ok = [h for h in range(24) if count[h] >= HOUR_MIN_DAYS]
+    out = [None, None, None, None, None, max(count)]
+    if len(ok) >= 18:
+        # Weigh each hour with its neighbours (1:2:1). Picking the extreme of
+        # 24 noisy averages otherwise overstates how much the hour matters.
+        def smooth(h):
+            near = [(price[h], 2)] + [(price[n % 24], 1) for n in (h - 1, h + 1) if count[n % 24] >= HOUR_MIN_DAYS]
+            return sum(v * w for v, w in near) / sum(w for _, w in near)
+        level = {h: smooth(h) for h in ok}
+        buy = min(ok, key=level.get)
+        sell = max(ok, key=level.get)
+        out[0:4] = [buy, round(max(0, 1 - level[buy]) * 100, 1), sell, round(max(0, level[sell] - 1) * 100, 1)]
+    busy = [h for h in range(24) if snaps[h] >= HOUR_MIN_DAYS]
+    if len(busy) >= 18 and any(sold[h] for h in busy):
+        out[4] = max(busy, key=lambda h: sold[h])
+    return out
+
+
+def build_summary(house_dir: Path, ts: int, stats: dict, since: int | None = None):
+    """One row per item listed right now, with its recent range (SUMMARY_COLS).
+
+    Also writes p/<shard>.json, each item's hour-of-day profile
+    ([24 prices x1000, 24 units sold x10, days]), and returns the market-wide
+    profile: gold traded and typical price level for each hour of the day.
+    """
     days = [d for d in hourly_days(house_dir) if d >= utc_day(ts - HOURLY_DAYS * 86400)]
-    by_shard: dict[int, list] = defaultdict(list)
-    for item_id in stats:
-        by_shard[item_id % SHARDS].append(item_id)
+    since = since or ts + 1                      # no sales counted yet
+    stamps: set = set()
+    load_shard_history(house_dir, 0, days, stamps)
+    snaps = [0] * 24                             # snapshots per sales hour
+    for stamp in stamps:
+        if stamp >= since:
+            snaps[(stamp - 1800) % 86400 // 3600] += 1
+    traded = [0.0] * 24
+    levels: list[list] = [[] for _ in range(24)]
     rows = []
-    for shard, ids in by_shard.items():
+    for shard in range(SHARDS):
         hist = load_shard_history(house_dir, shard, days)
-        for item_id in ids:
-            every = hist.get(item_id) or []
+        profiles = {}
+        for item_id, every in hist.items():
+            price, count, sold = hour_profile(every, snaps, since)
+            markets = [p[2] for p in every if p[2] is not None]
+            worth = statistics.median(markets) if markets else 0
+            for h in range(24):
+                traded[h] += sold[h] * worth
+                if price[h] is not None:
+                    levels[h].append(price[h])
+            if max(count) or any(sold):
+                profiles[str(item_id)] = (
+                    [None if v is None else round(v * 1000) for v in price]
+                    + [round(v * 10) for v in sold] + [max(count)])
+            if item_id not in stats:
+                continue
             sold1d = sum(p[4] for p in every if p[0] > ts - 86400)
             sold7d = sum(p[4] for p in every if p[0] > ts - 7 * 86400)
             points = [p for p in every if p[1] is not None] or [(ts, *stats[item_id][:3], 0)]
@@ -548,9 +641,23 @@ def build_summary(house_dir: Path, ts: int, stats: dict) -> list[list]:
                          min(lows7), median(lows7), max(lows7),
                          median([p[2] for p in w7]), len(w7),
                          min(lows30), median(lows30), max(lows30), len(w30),
-                         sold1d, sold7d])
+                         sold1d, sold7d, *best_hours(price, count, sold, snaps)])
+        write_json(house_dir / "p" / f"{shard:02d}.json", {"i": profiles})
+    seen = {r[0] for r in rows}
+    for item_id in stats:                        # brand-new items with no history file yet
+        if item_id not in seen:
+            low = stats[item_id][0]
+            rows.append([item_id, *stats[item_id], None, low, low, low, low,
+                         stats[item_id][1], 1, low, low, low, 1, 0, 0,
+                         None, None, None, None, None, 0])
     rows.sort(key=lambda r: r[0])
-    return rows
+    level = [statistics.median(v) if len(v) >= 20 else None for v in levels]
+    known = [v for v in level if v is not None]
+    centre = sum(known) / len(known) if known else 1
+    hours = {"traded": [round(v) for v in traded],
+             "price": [None if v is None else round(v / centre, 4) for v in level],
+             "snapshots": snaps, "utc": True}
+    return rows, hours
 
 
 # ----------------------------------------------------------- item names ----
@@ -714,10 +821,11 @@ def run(api, out: Path, cfg: dict, now: int | None = None) -> dict:
             wrote += 1
         roll_and_prune(house_dir, hs, now)
         if stats and (fresh or not (house_dir / "summary.json").exists()):
+            rows, hours = build_summary(house_dir, hs.get("last_ts", ts), stats,
+                                        hs.get("sales_since"))
             write_json(house_dir / "summary.json", {
                 "house": hid, "updated": hs.get("last_ts", ts),
-                "cols": SUMMARY_COLS,
-                "rows": build_summary(house_dir, hs.get("last_ts", ts), stats)})
+                "cols": SUMMARY_COLS, "hours": hours, "rows": rows})
         for item_id, row in stats.items():
             listing_counts[item_id] += row[4]
 

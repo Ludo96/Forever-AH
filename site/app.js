@@ -10,7 +10,7 @@ const FRESH = { cache: "no-cache" };
 const S = {
   meta: null, items: {}, house: null, updated: null,
   rows: [], byId: new Map(),
-  tab: "deals", q: "", sort: {}, limit: 100, discount: 20,
+  tab: "home", q: "", hours: null, sort: {}, limit: 100, discount: 20,
   recipes: null, prof: "Alchemy", skill: {},
   item: null, range: "7d", watch: new Set(), charts: [], observer: null, drawId: 0,
 };
@@ -185,6 +185,14 @@ const COLS = {
     cell: r => r.stock == null ? h("span", { class: "dim", text: "–" })
       : r.stock < 1 ? (Math.round(r.stock * 24) <= 1 ? "1 hour" : `${Math.round(r.stock * 24)} hours`)
         : `${r.stock < 10 ? r.stock.toFixed(1) : Math.round(r.stock)} days` },
+  buyAt: { label: "Cheapest at", num: 1, val: r => r.buyPct,
+    cell: r => h("span", null, clock(toLocal(r.buyHour)), h("span", { class: "sub", text: ` −${r.buyPct.toFixed(1)}%` })) },
+  sellAt: { label: "Dearest at", num: 1, val: r => r.sellPct,
+    cell: r => h("span", null, clock(toLocal(r.sellHour)), h("span", { class: "sub", text: ` +${r.sellPct.toFixed(1)}%` })) },
+  swing: { label: "Daily swing", num: 1, val: r => r.swing, cell: r => `${r.swing.toFixed(1)}%` },
+  peakAt: { label: "Sells most at", num: 1, cls: "hide-sm", val: r => r.peakHour == null ? null : toLocal(r.peakHour), first: 1,
+    cell: r => r.peakHour == null ? h("span", { class: "dim", text: "–" }) : clock(toLocal(r.peakHour)) },
+  sold7: { label: "Sold in 7 days", num: 1, cls: "hide-sm", cell: r => num(r.sold7), val: r => r.sold7 },
   skill: { label: "Skill", num: 1, cls: "hide-sm", always: 1, cell: r => String(r.skill), val: r => r.skill, first: 1 },
   cost: { label: "Materials", num: 1, always: 1, cell: r => money(r.cost), val: r => r.cost },
   sale: { label: "Sells for", num: 1, cls: "hide-sm", cell: r => money(r.low), val: r => r.low },
@@ -194,6 +202,7 @@ const COLS = {
 };
 
 const TABS = {
+  home: { label: "Home", cols: [], sort: ["name", 1], rows: () => [], blurb: () => "" },
   deals: {
     label: "Deals", count: true,
     cols: ["star", "name", "low", "usual", "discount", "near", "profit"], sort: ["discount", -1],
@@ -201,7 +210,7 @@ const TABS = {
     blurb: () => `Listed well below the item's usual low for the past 7 days. Resale margin is what is left per unit if you relist at the usual market price and pay the ${Math.round(currentHouse().cut * 100)}% auction cut.`,
   },
   vendor: {
-    label: "Vendor flips", count: true,
+    label: "Vendor flips", hidden: true,
     cols: ["star", "name", "low", "sell", "vprofit", "near"], sort: ["vprofit", -1],
     rows: () => S.rows.filter(r => r.vprofit > 0),
     blurb: () => "Listed for less than a vendor pays. Buy it, sell it to any vendor, keep the difference.",
@@ -209,7 +218,7 @@ const TABS = {
   prof: {
     label: "Professions",
     cols: ["star", "name", "skill", "cost", "sale", "craft", "usual"], sort: ["craft", -1],
-    rows: craftRows,
+    rows: () => craftRows(),
     blurb: () => `Material cost at current market prices (vendor price when cheaper), and what is left after selling at the lowest listing and paying the ${Math.round(currentHouse().cut * 100)}% auction cut. Recipes come from Wrath Classic data, so a few differ in Forever. Check the breakdown against the recipe in game before you buy.${S.skill[S.prof] ? ` Showing recipes that need ${S.prof} skill ${S.skill[S.prof]} or lower.` : ""}`,
   },
   volume: {
@@ -220,6 +229,13 @@ const TABS = {
       const span = S.salesHours >= 24 ? "the past 24 hours" : `the past ${Math.round(S.salesHours)} hour${Math.round(S.salesHours) === 1 ? "" : "s"} (counting started recently)`;
       return `Estimated sales over ${span}. Blizzard does not publish sales, so these count listings that vanished with plenty of time left or shrank between hourly snapshots. Cancelled auctions look the same as sales, so read the figures as an upper estimate. Value is units sold at the current market price; stock lasts is how long today's supply would cover that pace.`;
     },
+  },
+  timing: {
+    label: "Timing",
+    cols: ["star", "name", "buyAt", "sellAt", "swing", "peakAt", "sold7"], sort: ["swing", -1],
+    rows: () => S.rows.filter(r => r.buyHour != null && r.sold7 >= 10),
+    top: marketHours,
+    blurb: () => "When each item tends to be cheapest and dearest across the day, as a percentage against its average for the day. Times are in your local time. Daily swing is the gap between the two. An hour counts once it has been seen on 3 days, and a pattern from under two weeks of history can still be coincidence.",
   },
   all: {
     label: "All items",
@@ -258,11 +274,11 @@ function matPrice(id, field) {
   if (ah == null) return vendor == null ? null : vendor;
   return vendor == null ? ah : Math.min(ah, vendor);
 }
-function craftRows() {
+function craftRows(prof = S.prof) {
   if (!S.recipes) return [];
   const cut = currentHouse().cut;
-  const mine = S.skill[S.prof] || 300;
-  return (S.recipes.professions[S.prof] || []).filter(rec => rec[1] <= mine).map(([id, skill, lo, hi, flat]) => {
+  const mine = S.skill[prof] || 300;
+  return (S.recipes.professions[prof] || []).filter(rec => rec[1] <= mine).map(([id, skill, lo, hi, flat]) => {
     const base = S.byId.get(id) || unlisted(id);
     const makes = (lo + hi) / 2;
     let cost = 0, usualCost = 0, complete = true;
@@ -292,6 +308,171 @@ function kindOf(it) {
   if (!it) return "Blizzard has not published details for this item yet";
   const type = [it[3], it[2]].filter(Boolean).join(" ");
   return [QUALITY[it[1]], type.toLowerCase()].filter(Boolean).join(" ") + (it[4] ? `, item level ${it[4]}` : "");
+}
+
+/* --------------------------------------------------------- hour of day -- */
+
+/* The collector files everything by UTC hour; people read local time. */
+const OFF = Math.round(new Date().getTimezoneOffset() / 60);          // local hour + OFF = UTC hour
+const toLocal = utcHour => ((utcHour - OFF) % 24 + 24) % 24;
+const clock = hour => `${pad(hour)}:00`;
+const localOrder = utcValues => Array.from({ length: 24 }, (_, l) => utcValues[((l + OFF) % 24 + 24) % 24]);
+
+/* 24 bars, one per local hour. `level` draws values around 1.0 as above or
+   below the day's average; otherwise bars rise from zero. Hovering or tapping
+   a bar puts its value in the line under the chart. */
+function hourBars(utcValues, { level, fmt, idle }) {
+  const vals = localOrder(utcValues);
+  const read = h("p", { class: "hours-read", text: idle });
+  const scale = level ? Math.max(0.02, ...vals.map(v => v == null ? 0 : Math.abs(v - 1)))
+    : Math.max(1e-9, ...vals.map(v => v || 0));
+  const plot = h("div", { class: `hours${level ? " level" : ""}`, role: "img", "aria-label": idle }, vals.map((v, l) => {
+    let bar = null;
+    if (v != null && level) {
+      const d = (v - 1) / scale;
+      bar = h("i", { class: d >= 0 ? "hi" : "lo", style: `height:${Math.abs(d) * 50}%;${d >= 0 ? "bottom" : "top"}:50%` });
+    } else if (v != null) {
+      bar = h("i", { style: `height:${v > 0 ? Math.max(2, v / scale * 100) : 0}%;bottom:0` });
+    }
+    const text = `${clock(l)} to ${clock((l + 1) % 24)}: ${v == null ? "no data yet" : fmt(v)}`;
+    const col = h("div", { class: "hb" }, bar);
+    const show = () => { read.textContent = text; };
+    col.addEventListener("mouseenter", show);
+    col.addEventListener("click", show);
+    return col;
+  }));
+  plot.addEventListener("mouseleave", () => { read.textContent = idle; });
+  return h("div", { class: "hourchart" }, plot,
+    h("div", { class: "hours-axis", "aria-hidden": "true" }, [0, 6, 12, 18].map(x => h("span", { text: clock(x) }))), read);
+}
+
+const levelText = v => Math.abs(v - 1) < 0.0005 ? "at the day's average"
+  : `${Math.abs((v - 1) * 100).toFixed(1)}% ${v > 1 ? "above" : "below"} the day's average`;
+const peak = (vals, sign = 1) => vals.reduce((best, v, i) => v != null && (best < 0 || sign * v > sign * vals[best]) ? i : best, -1);
+
+/* Market-wide: gold traded and price level for each hour of the day. */
+function marketHours(compact) {
+  const hrs = S.hours;
+  const snaps = hrs ? hrs.snapshots.reduce((a, b) => a + b, 0) : 0;
+  if (!hrs || snaps < 2) {
+    return [h("p", { class: "hours-wait", text: "The by-hour picture appears once sales have been counted for a few hours." })];
+  }
+  const days = snaps / 24;
+  const busy = peak(hrs.traded), cheap = peak(hrs.price, -1), dear = peak(hrs.price);
+  const basis = days < 1 ? `Based on ${Math.round(snaps)} hours so far, so this is one day's shape, not a pattern yet.`
+    : days < 7 ? `Based on ${days.toFixed(1)} days so far. Give it a week before trusting the pattern.`
+    : `Averaged over ${Math.round(days)} days.`;
+  const trade = hourBars(hrs.traded, { fmt: v => `about ${moneyText(v)} traded`,
+    idle: `Most gold changes hands around ${clock(toLocal(busy))}. ${basis}` });
+  if (compact) return [trade];
+  const out = [h("div", { class: "hourpair" },
+    h("div", null, h("p", { class: "chart-title", text: "Gold traded by hour" }), trade),
+    cheap < 0 ? null : h("div", null, h("p", { class: "chart-title", text: "Price level by hour" }),
+      hourBars(hrs.price, { level: true, fmt: levelText,
+        idle: `Across the market, prices are lowest around ${clock(toLocal(cheap))} and highest around ${clock(toLocal(dear))}.` })))];
+  return out;
+}
+
+/* One item's profile, from p/<shard>.json: [24 prices x1000, 24 sold x10, days]. */
+async function itemHours(id) {
+  const box = $("#hoursBox");
+  if (!box) return;
+  let prof = null;
+  try {
+    const doc = await getJSON(`data/${S.house}/p/${pad(id % S.meta.shards)}.json`, FRESH);
+    prof = doc.i[id];
+  } catch { /* no profiles published yet */ }
+  if (S.item !== id || !box.isConnected || !prof) return;
+  const price = prof.slice(0, 24).map(v => v == null ? null : v / 1000);
+  const sold = prof.slice(24, 48).map(v => v / 10);
+  const days = prof[48];
+  const row = S.byId.get(id);
+  const parts = [h("p", { class: "chart-title hours-title", text: "By hour of day" })];
+  if (days >= 1) {
+    const cheap = peak(price, -1), dear = peak(price);
+    const sure = row && row.buyHour != null;
+    parts.push(h("p", { class: "small-title", text: "Price against the day's average" }),
+      hourBars(price, { level: true, fmt: levelText, idle: sure
+        ? `Usually cheapest around ${clock(toLocal(row.buyHour))} and dearest around ${clock(toLocal(row.sellHour))}, over ${days} days.`
+        : `Lowest around ${clock(toLocal(cheap))} and highest around ${clock(toLocal(dear))} so far. With ${days} day${days === 1 ? "" : "s"} of history this is not a pattern yet.` }));
+  }
+  if (sold.some(v => v > 0)) {
+    parts.push(h("p", { class: "small-title", text: "Estimated units sold per hour" }),
+      hourBars(sold, { fmt: v => `about ${v < 10 ? v.toFixed(1) : num(Math.round(v))} sold`,
+        idle: `Sells most around ${clock(toLocal(peak(sold)))}.` }));
+  }
+  if (parts.length > 1) box.replaceChildren(...parts);
+}
+
+/* ----------------------------------------------------------------- home -- */
+
+function panel(title, tab, rows, emptyText, extra) {
+  return h("section", { class: "panel" },
+    h("div", { class: "panel-head" },
+      h("h2", { text: title }),
+      tab ? h("button", { class: "linkish", type: "button", onclick: () => goTab(tab), text: "See all" }) : null),
+    extra || null,
+    rows.length ? h("ul", { class: "hl" }, rows) : (emptyText ? h("p", { class: "panel-empty", text: emptyText }) : null));
+}
+function hlRow(row, note, value) {
+  return h("li", null, h("button", { type: "button", class: row.id === S.item ? "on" : null, onclick: () => openItem(row.id) },
+    h("span", { class: "hl-name" }, h("span", { class: `q q${row.quality}` }), h("span", { text: row.name }),
+      note ? h("span", { class: "sub", text: note }) : null),
+    h("span", { class: "hl-val" }, value)));
+}
+
+function renderHome() {
+  if (!S.rows.length) {
+    return [h("div", { class: "empty" }, h("strong", { text: "No prices for this auction house yet" }),
+      "The collector has not saved a snapshot for it. It checks every 20 minutes.")];
+  }
+  const house = currentHouse();
+  const snaps = house.snapshots || 0;
+  const top = (rows, key, n = 6) => rows.slice().sort((a, b) => b[key] - a[key]).slice(0, n);
+  const pct = (v, cap = 999) => `${Math.min(cap, Math.abs(Math.round(v * 100)))}%`;
+
+  const deals = top(TABS.deals.rows(), "discount");
+  const traded = top(S.rows.filter(r => r.value), "value");
+  const moved = S.rows.filter(r => r.change != null && r.sold1 > 0 && r.n7 >= DEAL_MIN_POINTS && r.low >= 100);
+  const fell = top(moved.filter(r => r.change < -0.05).map(r => ({ ...r, drop: -r.change })), "drop", 3);
+  const rose = top(moved.filter(r => r.change > 0.05), "change", 3);
+
+  const saved = S.recipes ? Object.keys(S.recipes.professions).filter(p => S.skill[p]) : [];
+  const profs = S.recipes ? (saved.length ? saved : Object.keys(S.recipes.professions)) : [];
+  const crafts = top(profs.flatMap(p => craftRows(p).filter(r => r.craft > 0 && r.sold1 > 0).map(r => ({ ...r, prof: p }))), "craft");
+
+  const watched = [...S.watch].map(id => S.byId.get(id) || unlisted(id)).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 8);
+  const total = S.rows.reduce((sum, r) => sum + (r.value || 0), 0);
+  const span = S.salesHours >= 24 ? "24 hours" : `${Math.round(S.salesHours)} hour${Math.round(S.salesHours) === 1 ? "" : "s"}`;
+  const stat = (label, value) => h("div", null, h("dt", { text: label }), h("dd", null, value));
+  const wait = `Needs ${DEAL_MIN_POINTS} hourly snapshots to know what is usual. ${Math.min(snaps, DEAL_MIN_POINTS)} collected so far.`;
+
+  return [
+    h("dl", { class: "pulse" },
+      stat("Items on sale", num(S.rows.length)),
+      stat("Units on sale", num(S.rows.reduce((sum, r) => sum + r.qty, 0))),
+      S.salesHours ? stat(`Traded in ${span}, estimated`, money(total)) : null,
+      stat("History collected", snaps >= 48 ? `${Math.floor(snaps / 24)} days` : `${snaps} hour${snaps === 1 ? "" : "s"}`)),
+    h("div", { class: "panels" },
+      panel("Best deals", "deals", deals.map(r => hlRow(r, null,
+        h("span", null, money(r.low), " ", h("span", { class: "pill", text: `−${pct(r.discount, 99)}` })))),
+        snaps < DEAL_MIN_POINTS ? wait : "Nothing is listed well below its usual price right now."),
+      panel("Most gold traded", "volume", traded.map(r => hlRow(r, `about ${num(r.sold1)} sold`, money(r.value))),
+        "Sales are counted by comparing hourly snapshots. The first figures appear after the next refresh."),
+      panel("Biggest moves in 24 hours", "all", [
+        ...fell.map(r => hlRow(r, null, h("span", null, money(r.low), " ", h("span", { class: "down", text: pct(r.change) })))),
+        ...rose.map(r => hlRow(r, null, h("span", null, money(r.low), " ", h("span", { class: "up", text: pct(r.change) })))),
+      ], snaps < DEAL_MIN_POINTS + 1 ? "Needs a full day of history to compare against." : "No item that sells has moved more than 5% since yesterday."),
+      panel("Most profitable crafts", "prof", crafts.map(r => hlRow(r, `${r.prof} ${r.skill}`, money(r.craft))),
+        saved.length ? "Nothing profitable at your saved skill levels right now." : "No craft is profitable at current prices.",
+        h("p", { class: "panel-note", text: saved.length
+          ? `At your saved skill in ${saved.join(", ")}. Check the recipe in game before buying materials.`
+          : "All skill levels. Set your skill under Professions to see only what you can make. Check the recipe in game before buying materials." })),
+      panel("Busiest hours", "timing", [], null, h("div", null, marketHours(true))),
+      panel("Your watchlist", "watch", watched.map(r => hlRow(r, r.listed ? null : "not listed",
+        r.listed ? h("span", null, money(r.low), r.sig ? h("span", { class: `sig ${r.sig.tone} hl-sig`, text: r.sig.label }) : null) : h("span", { class: "dim", text: "–" }))),
+        "Star any item to pin it here. Saved in this browser only.")),
+  ];
 }
 
 /* -------------------------------------------------------------- loading -- */
@@ -355,6 +536,7 @@ async function loadHouse() {
   try { doc = await getJSON(`data/${S.house}/summary.json${S.bust || ""}`, FRESH); } catch { /* no snapshot yet */ }
   const c = Object.fromEntries(doc.cols.map((name, i) => [name, i]));
   S.updated = doc.updated;
+  S.hours = doc.hours || null;
   S.rows = doc.rows.map(r => {
     const id = r[c.id], it = S.items[id];
     const low = r[c.low], m7 = r[c.low7dMed], mk7 = r[c.market7dMed], prev = r[c.low24hAgo];
@@ -369,6 +551,8 @@ async function loadHouse() {
       discount: m7 ? 1 - low / m7 : 0,
       profit: Math.round(mk7 * (1 - house.cut)) - low,
       vprofit: sell ? sell - low : null,
+      buyHour: r[c.buyHour], buyPct: r[c.buyPct], sellHour: r[c.sellHour], sellPct: r[c.sellPct],
+      peakHour: r[c.peakHour], swing: r[c.buyHour] == null ? null : r[c.buyPct] + r[c.sellPct],
     };
   });
   // Sales are only counted since the collector started comparing snapshots,
@@ -438,6 +622,10 @@ function showEmpty(title, body) {
 function emptyMessage(q) {
   const house = currentHouse();
   if (q) return [`Nothing matches “${q}”`, "Check the spelling, or try the All items view."];
+  if (S.tab === "timing") {
+    const days = Math.floor((currentHouse().snapshots || 0) / 24);
+    return ["Item timing needs 3 days of history", `An hour of the day only counts once it has been seen on 3 different days. ${days} full day${days === 1 ? "" : "s"} collected so far.`];
+  }
   if (S.tab === "volume") return ["No sales counted yet", "Sales are estimated by comparing each hourly snapshot with the one before, so the first figures appear after the next refresh."];
   if (S.tab === "prof" && !S.recipes) return ["Recipes could not be loaded", "Reload the page to try again."];
   if (S.tab === "prof" && S.skill[S.prof]) return [`Nothing to craft at ${S.prof} skill ${S.skill[S.prof]} yet`, "No recipe at or below that level has its materials or result on sale right now. Raise the level or clear the box to see everything."];
@@ -453,19 +641,43 @@ function emptyMessage(q) {
   return ["Nothing to show", ""];
 }
 
+function goTab(key) {
+  S.tab = key;
+  S.limit = 100;
+  writeHash();
+  render();
+}
+
 function render() {
   const tab = TABS[S.tab];
+  const shown = S.tab === "vendor" ? "deals" : S.tab;       // vendor flips live under Deals
 
-  $("#tabs").replaceChildren(...Object.entries(TABS).map(([key, t]) => h("button", {
-    type: "button", role: "tab", "aria-selected": String(key === S.tab),
-    onclick: () => { S.tab = key; S.limit = 100; writeHash(); render(); },
+  $("#tabs").replaceChildren(...Object.entries(TABS).filter(([, t]) => !t.hidden).map(([key, t]) => h("button", {
+    type: "button", role: "tab", "aria-selected": String(key === shown),
+    onclick: () => goTab(key),
   }, t.label, t.count && S.rows.length ? h("span", { class: "count", text: num(t.rows().length) }) : null)));
+
+  const isHome = S.tab === "home";
+  $("#home").hidden = !isHome;
+  $(".list-head").hidden = isHome;
+  $("#top").replaceChildren(...(tab.top ? tab.top() : []));
+  if (isHome) {
+    $("#home").replaceChildren(...renderHome());
+    $("#table").hidden = true;
+    $("#empty").hidden = true;
+    $("#more").hidden = true;
+    return;
+  }
 
   $("#blurb").textContent = tab.blurb();
   $("#controls").replaceChildren(...(S.tab === "deals" ? [
     h("label", { for: "discount", text: "At least" }),
     h("select", { id: "discount", onchange: e => { S.discount = +e.target.value; render(); } },
       [10, 20, 30, 50].map(v => h("option", { value: v, selected: v === S.discount, text: `${v}% below usual` }))),
+    h("button", { class: "quiet", type: "button", onclick: () => goTab("vendor"),
+      text: `Below vendor price (${num(TABS.vendor.rows().length)})` }),
+  ] : S.tab === "vendor" ? [
+    h("button", { class: "quiet", type: "button", onclick: () => goTab("deals"), text: "Back to deals" }),
   ] : S.tab === "prof" && S.recipes ? [
     h("label", { for: "prof", text: "Profession" }),
     h("select", { id: "prof", onchange: e => { S.prof = e.target.value; S.limit = 100; writeHash(); render(); } },
@@ -668,7 +880,9 @@ function renderDetail(keepCharts) {
     h("p", { class: "small-title", text: "Units on sale" }),
     h("div", { id: "qtyChart", class: "chart", role: "img", "aria-label": `Units on sale for ${row.name}` }),
     h("p", { class: "small-title", text: "Estimated units sold" }),
-    h("div", { id: "soldChart", class: "chart", role: "img", "aria-label": `Estimated units sold for ${row.name}` })));
+    h("div", { id: "soldChart", class: "chart", role: "img", "aria-label": `Estimated units sold for ${row.name}` }),
+    h("div", { id: "hoursBox" })));
+  itemHours(row.id);
   box.hidden = false;
   $("#layout").classList.add("split");
   drawItem();
@@ -898,7 +1112,17 @@ async function drawItem() {
 function bind() {
   const q = $("#q");
   q.value = S.q;
-  q.addEventListener("input", () => { S.q = q.value; S.limit = 100; writeHash(); render(); });
+  q.addEventListener("input", () => {
+    S.q = q.value;
+    S.limit = 100;
+    if (S.tab === "home" && S.q.trim()) S.tab = "all";       // a search from Home looks through everything
+    writeHash();
+    render();
+  });
+  // Created here so an older cached page still gets them.
+  const list = $(".list");
+  if (!$("#home")) list.insertBefore(h("div", { id: "home", class: "home", hidden: true }), list.firstChild);
+  if (!$("#top")) list.insertBefore(h("div", { id: "top" }), $(".tablewrap"));
   $("#more").addEventListener("click", () => { S.limit += 200; render(); });
   $("#table tbody").addEventListener("click", e => {
     const tr = e.target.closest("tr[data-id]");

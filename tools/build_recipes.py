@@ -22,6 +22,14 @@ import sys
 from pathlib import Path
 
 SKIP = {"Jewelcrafting", "Inscription"}
+LOTUS, VIAL = 13468, 8925
+FLASKS = {                                  # product: [material, amount, ...]
+    13506: [13423, 30, 13465, 10, LOTUS, 1, VIAL, 1],   # Petrification: Stonescale Oil, Mountain Silversage
+    13510: [8846, 30, 13423, 10, LOTUS, 1, VIAL, 1],    # the Titans: Gromsblood, Stonescale Oil
+    13511: [13463, 30, 13467, 10, LOTUS, 1, VIAL, 1],   # Distilled Wisdom: Dreamfoil, Icecap
+    13512: [13463, 30, 13465, 10, LOTUS, 1, VIAL, 1],   # Supreme Power: Dreamfoil, Mountain Silversage
+    13513: [13467, 30, 13465, 10, LOTUS, 1, VIAL, 1],   # Chromatic Resistance: Icecap, Mountain Silversage
+}
 QUALITY = {"Poor": 0, "Common": 1, "Uncommon": 2, "Rare": 3, "Epic": 4, "Legendary": 5}
 
 
@@ -45,6 +53,17 @@ def main(src: str) -> None:
             low, high = made["amount"]
             professions.setdefault(made["category"], []).append(
                 [item["itemId"], made["requiredSkill"], low, high, flat])
+    # The five old-world flasks were made cheaper in later expansions. Put the
+    # original amounts back: 30 + 10 herbs, a Black Lotus and a Crystal Vial
+    # for one flask.
+    for row in professions.get("Alchemy", []):
+        if row[0] in FLASKS:
+            assert "Flask" in names[row[0]] or "Petrification" in names[row[0]], names[row[0]]
+            row[2], row[3], row[4] = 1, 1, FLASKS[row[0]]
+            for mat in row[4][0::2]:
+                names[mat] = by_id[mat]["name"]
+                if by_id[mat].get("vendorPrice"):
+                    vendor[mat] = by_id[mat]["vendorPrice"]
     for rows in professions.values():
         rows.sort(key=lambda r: (r[1], r[0]))
     out = {"source": "wow-classic-items 2.0.1 (MIT), Wrath Classic recipe data",

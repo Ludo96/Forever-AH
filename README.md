@@ -12,25 +12,29 @@ item, and publishes a static dashboard. There is no server and no database.
 
 ## What the dashboard shows
 
+- **Home**: the highlights. Best deals, most gold traded, biggest moves in 24
+  hours, most profitable crafts, busiest hours and your watchlist.
 - **Deals**: items listed well below their usual low for the past 7 days, with
-  the margin left if you relist at the usual market price.
-- **Vendor flips**: items listed for less than a vendor pays.
-- **Buy / hold / sell signal**: a meter on every item page and a sortable
-  column, comparing today's lowest price with the item's past 7 days.
-- **Volume**: estimated units and value sold in the past 24 hours, and how
-  long the current stock would last at that pace.
+  the margin left if you relist at the usual market price. Items listed below
+  vendor price sit behind a button here.
 - **Professions**: what each craft costs in materials, what the result sells
   for, and what is left after the auction cut. Enter your skill level to see
-  only what you can craft (saved per profession in your browser). Open an item to see its recipe
-  priced line by line, and its crafting cost charted against its price over
-  time.
+  only what you can craft (saved per profession in your browser). Open an item
+  to see its recipe priced line by line, and its crafting cost charted against
+  its price over time.
+- **Volume**: estimated units and value sold in the past 24 hours, and how
+  long the current stock would last at that pace.
+- **Timing**: which hours of the day the market is busiest and cheapest, and
+  for each item the hour it tends to be cheapest, dearest and sell most. Shown
+  in the viewer's local time.
 - **All items**: everything on sale, with the lowest price, market price,
-  24-hour change, 7-day range and units on sale.
+  24-hour change, 7-day range, a buy / hold / sell signal and units on sale.
 - **Watchlist**: items you star. Saved in your own browser, so each friend
   keeps their own list.
-- **Item view**: price and supply charts over 24 hours, 7 days, 30 days or all
-  time. The page address updates as you browse, so any view can be shared as a
-  link.
+- **Item view**: a buy / hold / sell meter, price, supply and sales charts
+  over 24 hours, 7 days, 30 days or all time, and the item's price and sales
+  by hour of day. The page address updates as you browse, so any view can be
+  shared as a link.
 
 ## Setup
 
@@ -62,6 +66,11 @@ old.
   and other one-off items, reposted listings are subtracted. Cancelling the
   cheapest listing still looks like a sale, so the figures are an upper
   estimate.
+- **Timing needs days, not hours.** Each snapshot is compared with that day's
+  median price, then averaged by hour of day. An item's best hour is named
+  only once at least 18 hours of the day have been seen on 3 different days,
+  and the pick is smoothed with its neighbouring hours. Under two weeks of
+  history a pattern can still be coincidence.
 - **The signal is not a forecast.** It scores today's price against the past
   week: 60% distance from the usual low (30% away is the full swing), 40%
   position between the week's low and high. Above +0.5 reads Buy, below -0.5
@@ -92,9 +101,10 @@ old.
   versions of the same base item are counted together.
 - **Recipes are borrowed.** Blizzard's Forever API has no recipe data, so the
   Professions tab uses the open `wow-classic-items` dataset, which describes
-  recipes as they stood in Wrath Classic. Most old-world recipes match, a few
-  (flasks, for one) used different amounts originally, and anything Forever
-  added or changed is missing. Rebuild with `tools/build_recipes.py`.
+  recipes as they stood in Wrath Classic. Most old-world recipes match. The
+  five flasks, which later expansions made cheaper, are set back to their
+  original amounts by hand; other changed recipes may remain, and anything
+  Forever added or changed is missing. Rebuild with `tools/build_recipes.py`.
 - **Auction cut.** Resale margins assume a 5% cut (15% at Blackwater), set in
   `collector/config.json`.
 
@@ -121,6 +131,7 @@ Everything lives on the `gh-pages` branch under `data/`, as small JSON files:
 | `<house>/summary.json` | One row per item listed now, with 7- and 30-day ranges |
 | `<house>/h/<date>/<shard>.json` | Hourly points, kept 30 days |
 | `<house>/d/<month>/<shard>.json` | Daily points, kept indefinitely |
+| `<house>/p/<shard>.json` | Each item's price and sales by hour of day |
 | `<house>/open.json.gz` | Listings of the last snapshot, for the next sales estimate |
 
 History is split into 64 shards by item id, so viewing an item downloads a few
