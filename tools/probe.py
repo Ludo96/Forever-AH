@@ -27,7 +27,10 @@ for arg in sys.argv[1:]:
     path, _, namespace = arg.partition("@")
     namespace = namespace or "static-forever-eu"
     try:
-        doc, _ = api.get(path, namespace, tries=2)
+        if "?" in path:                          # a search: the query is already started
+            doc, _ = api._get_url(f"{api.host}{path}&namespace={namespace}&locale=en_GB", 2)
+        else:
+            doc, _ = api.get(path, namespace, tries=2)
         print(f"== {path} [{namespace}]\n{json.dumps(trim(doc), ensure_ascii=False)[:3500]}")
     except collect.NotFound:
         print(f"== {path} [{namespace}]\n404")
