@@ -358,11 +358,12 @@ function marketHours(compact) {
     return [h("p", { class: "hours-wait", text: "The by-hour picture appears once sales have been counted for a few hours." })];
   }
   const days = snaps / 24;
-  const busy = peak(hrs.traded), cheap = peak(hrs.price, -1), dear = peak(hrs.price);
+  const tradedBy = hrs.traded.map((v, i) => hrs.snapshots[i] ? v : null);       // hours not seen yet stay blank
+  const busy = peak(tradedBy), cheap = peak(hrs.price, -1), dear = peak(hrs.price);
   const basis = days < 1 ? `Based on ${Math.round(snaps)} hours so far, so this is one day's shape, not a pattern yet.`
     : days < 7 ? `Based on ${days.toFixed(1)} days so far. Give it a week before trusting the pattern.`
     : `Averaged over ${Math.round(days)} days.`;
-  const trade = hourBars(hrs.traded, { fmt: v => `about ${moneyText(v)} traded`,
+  const trade = hourBars(tradedBy, { fmt: v => `about ${moneyText(v)} traded`,
     idle: `Most gold changes hands around ${clock(toLocal(busy))}. ${basis}` });
   if (compact) return [trade];
   const out = [h("div", { class: "hourpair" },
