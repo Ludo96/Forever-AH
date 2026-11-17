@@ -102,7 +102,10 @@ old.
   of auctionable items. The collector falls back to Classic Era data, looks up
   at most 1,500 new items per run, and retries unknown ones every few days.
 - **Random-suffix items share an id.** "of the Tiger" and "of the Bear"
-  versions of the same base item are counted together.
+  versions of the same base item are counted together. Searching a full name
+  such as "Thick Scale Breastplate of Magic" finds the base item. Blizzard's
+  listings carry bonus-list codes, but several codes turned out to share one
+  suffix in game, so they are not used to split suffixes.
 - **Recipes come from Blizzard, skill levels partly do not.** Once a day
   `collector/recipes.py` reads every recipe from Blizzard's Forever profession
   data: what it makes, the materials and the amount. Blizzard does not publish

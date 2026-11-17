@@ -710,7 +710,20 @@ function render() {
 
   const q = S.q.trim().toLowerCase();
   let rows = tab.rows();
-  if (q) rows = rows.filter(r => r.name.toLowerCase().includes(q) || String(r.id) === q);
+  if (q) {
+    const all = rows;
+    rows = all.filter(r => r.name.toLowerCase().includes(q) || String(r.id) === q);
+    // "Thick Scale Breastplate of Magic": random suffixes are listed under the
+    // base item, so when the full name finds nothing, look for the base name.
+    const cut = q.lastIndexOf(" of ");
+    if (!rows.length && cut > 0) {
+      const base = q.slice(0, cut).trim();
+      rows = all.filter(r => r.name.toLowerCase() === base);
+      if (rows.length) {
+        $("#blurb").textContent = `Random suffixes such as “${S.q.trim().slice(cut + 1)}” are priced together under ${rows[0].name}, so its prices cover every suffix on sale.`;
+      }
+    }
+  }
   rows = sortRows(rows, tab);
 
   const [sortKey, sortDir] = S.sort[S.tab] || tab.sort;
