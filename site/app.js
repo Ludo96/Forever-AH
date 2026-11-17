@@ -11,7 +11,7 @@ const S = {
   meta: null, items: {}, house: null, updated: null,
   rows: [], byId: new Map(),
   tab: "deals", q: "", sort: {}, limit: 100, discount: 20,
-  recipes: null, prof: "Alchemy",
+  recipes: null, prof: "Alchemy", skill: {},
   item: null, range: "7d", watch: new Set(), charts: [], observer: null, drawId: 0,
 };
 
@@ -109,6 +109,18 @@ function writeHash() {
 }
 function loadWatch() {
   try { S.watch = new Set(JSON.parse(localStorage.getItem("ledger.watch") || "[]")); } catch { /* private mode */ }
+  try { S.skill = JSON.parse(localStorage.getItem("ledger.skill") || "{}") || {}; } catch { /* private mode */ }
+}
+/* Your skill level per profession (1 to 300), saved in this browser. */
+function setSkill(text) {
+  const n = Math.min(300, parseInt(text, 10));
+  if (n >= 1) S.skill[S.prof] = n; else delete S.skill[S.prof];
+  try { localStorage.setItem("ledger.skill", JSON.stringify(S.skill)); } catch { /* not saved */ }
+  S.limit = 100;
+  render();
+  const input = $("#skill");                       // the controls were rebuilt: keep typing
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
 }
 function toggleWatch(id) {
   S.watch.has(id) ? S.watch.delete(id) : S.watch.add(id);
@@ -198,7 +210,7 @@ const TABS = {
     label: "Professions",
     cols: ["star", "name", "skill", "cost", "sale", "craft", "usual"], sort: ["craft", -1],
     rows: craftRows,
-    blurb: () => `Material cost at current market prices (vendor price when cheaper), and what is left after selling at the lowest listing and paying the ${Math.round(currentHouse().cut * 100)}% auction cut. Recipes come from Wrath Classic data, so a few differ in Forever. Check the breakdown against the recipe in game before you buy.`,
+    blurb: () => `Material cost at current market prices (vendor price when cheaper), and what is left after selling at the lowest listing and paying the ${Math.round(currentHouse().cut * 100)}% auction cut. Recipes come from Wrath Classic data, so a few differ in Forever. Check the breakdown against the recipe in game before you buy.${S.skill[S.prof] ? ` Showing recipes that need ${S.prof} skill ${S.skill[S.prof]} or lower.` : ""}`,
   },
   volume: {
     label: "Volume",
@@ -249,7 +261,8 @@ function matPrice(id, field) {
 function craftRows() {
   if (!S.recipes) return [];
   const cut = currentHouse().cut;
-  return (S.recipes.professions[S.prof] || []).map(([id, skill, lo, hi, flat]) => {
+  const mine = S.skill[S.prof] || 300;
+  return (S.recipes.professions[S.prof] || []).filter(rec => rec[1] <= mine).map(([id, skill, lo, hi, flat]) => {
     const base = S.byId.get(id) || unlisted(id);
     const makes = (lo + hi) / 2;
     let cost = 0, usualCost = 0, complete = true;
@@ -427,6 +440,7 @@ function emptyMessage(q) {
   if (q) return [`Nothing matches “${q}”`, "Check the spelling, or try the All items view."];
   if (S.tab === "volume") return ["No sales counted yet", "Sales are estimated by comparing each hourly snapshot with the one before, so the first figures appear after the next refresh."];
   if (S.tab === "prof" && !S.recipes) return ["Recipes could not be loaded", "Reload the page to try again."];
+  if (S.tab === "prof" && S.skill[S.prof]) return [`Nothing to craft at ${S.prof} skill ${S.skill[S.prof]} yet`, "No recipe at or below that level has its materials or result on sale right now. Raise the level or clear the box to see everything."];
   if (S.tab === "prof") return ["No priced recipes yet", "None of this profession's materials or results are on sale right now."];
   if (S.tab === "watch") return ["Your watchlist is empty", "Star any item to keep it here. The list is saved in this browser only."];
   if (!S.rows.length) return ["No prices for this auction house yet", "The collector has not saved a snapshot for it. It runs about once an hour."];
@@ -456,6 +470,10 @@ function render() {
     h("label", { for: "prof", text: "Profession" }),
     h("select", { id: "prof", onchange: e => { S.prof = e.target.value; S.limit = 100; writeHash(); render(); } },
       Object.keys(S.recipes.professions).map(name => h("option", { value: name, selected: name === S.prof, text: name }))),
+    h("label", { for: "skill", text: "My skill" }),
+    h("input", { id: "skill", type: "text", inputmode: "numeric", maxlength: "3", placeholder: "Any", autocomplete: "off",
+      value: S.skill[S.prof] || "", title: "Show only recipes you can craft at this skill level",
+      oninput: e => setSkill(e.target.value.replace(/\D/g, "")) }),
   ] : []));
 
   const q = S.q.trim().toLowerCase();

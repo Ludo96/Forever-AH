@@ -20,7 +20,8 @@ item, and publishes a static dashboard. There is no server and no database.
 - **Volume**: estimated units and value sold in the past 24 hours, and how
   long the current stock would last at that pace.
 - **Professions**: what each craft costs in materials, what the result sells
-  for, and what is left after the auction cut. Open an item to see its recipe
+  for, and what is left after the auction cut. Enter your skill level to see
+  only what you can craft (saved per profession in your browser). Open an item to see its recipe
   priced line by line, and its crafting cost charted against its price over
   time.
 - **All items**: everything on sale, with the lowest price, market price,

@@ -103,8 +103,12 @@ button, input, select { font: inherit; color: inherit; }
   gap: 12px 24px; flex-wrap: wrap; margin-bottom: 12px; }
 .blurb { color: var(--ink-2); max-width: 68ch; }
 .controls { display: flex; align-items: center; gap: 8px; color: var(--ink-2); }
-.controls select { background: var(--surface); border: 1px solid var(--line);
+.controls { flex-wrap: wrap; }
+.controls select, .controls input { background: var(--surface); border: 1px solid var(--line);
   border-radius: 8px; padding: 5px 8px; }
+.controls input { width: 4.2em; text-align: right; }
+.controls input::placeholder { color: var(--muted); }
+.controls select + label { margin-left: 10px; }
 
 /* ---- table ---- */
 .tablewrap { overflow-x: auto; }
