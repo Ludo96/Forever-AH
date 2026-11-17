@@ -43,6 +43,12 @@ jobs:
           BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
         run: python3 collector/collect.py --out public
 
+      - name: Refresh recipes (once a day)
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+        run: python3 collector/recipes.py --out public
+
       - name: Publish the dashboard
         run: |
           cp -r site/. public/

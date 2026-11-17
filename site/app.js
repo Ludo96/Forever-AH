@@ -193,7 +193,8 @@ const COLS = {
   peakAt: { label: "Sells most at", num: 1, cls: "hide-sm", val: r => r.peakHour == null ? null : toLocal(r.peakHour), first: 1,
     cell: r => r.peakHour == null ? h("span", { class: "dim", text: "–" }) : clock(toLocal(r.peakHour)) },
   sold7: { label: "Sold in 7 days", num: 1, cls: "hide-sm", cell: r => num(r.sold7), val: r => r.sold7 },
-  skill: { label: "Skill", num: 1, cls: "hide-sm", always: 1, cell: r => String(r.skill), val: r => r.skill, first: 1 },
+  skill: { label: "Skill", num: 1, cls: "hide-sm", always: 1, val: r => r.skill, first: 1,
+    cell: r => r.skill == null ? h("span", { class: "dim", title: "Blizzard does not publish the skill for this recipe", text: "?" }) : String(r.skill) },
   cost: { label: "Materials", num: 1, always: 1, cell: r => money(r.cost), val: r => r.cost },
   sale: { label: "Sells for", num: 1, cls: "hide-sm", cell: r => money(r.low), val: r => r.low },
   craft: { label: "Profit per craft", num: 1, always: 1, cell: r => money(r.craft), val: r => r.craft },
@@ -219,7 +220,14 @@ const TABS = {
     label: "Professions",
     cols: ["star", "name", "skill", "cost", "sale", "craft", "usual"], sort: ["craft", -1],
     rows: () => craftRows(),
-    blurb: () => `Material cost at current market prices (vendor price when cheaper), and what is left after selling at the lowest listing and paying the ${Math.round(currentHouse().cut * 100)}% auction cut. Recipes come from Wrath Classic data, so a few differ in Forever. Check the breakdown against the recipe in game before you buy.${S.skill[S.prof] ? ` Showing recipes that need ${S.prof} skill ${S.skill[S.prof]} or lower.` : ""}`,
+    blurb: () => {
+      const cut = Math.round(currentHouse().cut * 100);
+      const source = S.recipes && S.recipes.official
+        ? "Recipes come from Blizzard's Forever data. Skill levels come from the items that teach each recipe or from original Classic, so a few new recipes show ? and are never filtered out."
+        : "Recipes come from Wrath Classic data, so a few differ in Forever. Check the breakdown against the recipe in game before you buy.";
+      const mine = S.skill[S.prof] ? ` Showing recipes that need ${S.prof} skill ${S.skill[S.prof]} or lower.` : "";
+      return `Material cost at current market prices (vendor price when cheaper), and what is left after selling at the lowest listing and paying the ${cut}% auction cut. ${source}${mine}`;
+    },
   },
   volume: {
     label: "Volume",
@@ -464,11 +472,11 @@ function renderHome() {
         ...fell.map(r => hlRow(r, null, h("span", null, money(r.low), " ", h("span", { class: "down", text: pct(r.change) })))),
         ...rose.map(r => hlRow(r, null, h("span", null, money(r.low), " ", h("span", { class: "up", text: pct(r.change) })))),
       ], snaps < DEAL_MIN_POINTS + 1 ? "Needs a full day of history to compare against." : "No item that sells has moved more than 5% since yesterday."),
-      panel("Most profitable crafts", "prof", crafts.map(r => hlRow(r, `${r.prof} ${r.skill}`, money(r.craft))),
+      panel("Most profitable crafts", "prof", crafts.map(r => hlRow(r, r.skill == null ? r.prof : `${r.prof} ${r.skill}`, money(r.craft))),
         saved.length ? "Nothing profitable at your saved skill levels right now." : "No craft is profitable at current prices.",
         h("p", { class: "panel-note", text: saved.length
-          ? `At your saved skill in ${saved.join(", ")}. Check the recipe in game before buying materials.`
-          : "All skill levels. Set your skill under Professions to see only what you can make. Check the recipe in game before buying materials." })),
+          ? `At your saved skill in ${saved.join(", ")}.`
+          : "All skill levels. Set your skill under Professions to see only what you can make." })),
       panel("Busiest hours", "timing", [], null, h("div", null, marketHours(true))),
       panel("Your watchlist", "watch", watched.map(r => hlRow(r, r.listed ? null : "not listed",
         r.listed ? h("span", null, money(r.low), r.sig ? h("span", { class: `sig ${r.sig.tone} hl-sig`, text: r.sig.label }) : null) : h("span", { class: "dim", text: "–" }))),
@@ -491,7 +499,7 @@ async function boot() {
   }
   [S.items, S.recipes] = await Promise.all([
     getJSON("data/items.json", FRESH).catch(() => ({})),
-    getJSON("recipes.json").catch(() => null)]);
+    getJSON("data/recipes.json", FRESH).catch(() => getJSON("recipes.json")).catch(() => null)]);
   if (S.recipes && !(S.prof in S.recipes.professions)) S.prof = Object.keys(S.recipes.professions)[0];
   if (!S.meta.houses.some(x => x.id === S.house)) {
     S.house = (S.meta.houses.find(x => x.faction === "horde") || S.meta.houses[0]).id;
@@ -805,7 +813,7 @@ function recipeBlock([prof, [, skill, lo, hi, flat]]) {
   }
   return h("div", { class: "recipe" },
     h("p", { class: "chart-title", text: `${prof} recipe` }),
-    h("p", { class: "kind", text: `Skill ${skill}${makes}` }),
+    h("p", { class: "kind", text: `${skill == null ? "Skill level not published" : `Skill ${skill}`}${makes}` }),
     h("ul", { class: "mats" }, mats,
       h("li", { class: "sum" }, h("span", { text: complete ? "Materials" : "Materials on sale" }), money(total))));
 }

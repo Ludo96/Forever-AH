@@ -99,12 +99,15 @@ old.
   at most 1,500 new items per run, and retries unknown ones every few days.
 - **Random-suffix items share an id.** "of the Tiger" and "of the Bear"
   versions of the same base item are counted together.
-- **Recipes are borrowed.** Blizzard's Forever API has no recipe data, so the
-  Professions tab uses the open `wow-classic-items` dataset, which describes
-  recipes as they stood in Wrath Classic. Most old-world recipes match. The
-  five flasks, which later expansions made cheaper, are set back to their
-  original amounts by hand; other changed recipes may remain, and anything
-  Forever added or changed is missing. Rebuild with `tools/build_recipes.py`.
+- **Recipes come from Blizzard, skill levels partly do not.** Once a day
+  `collector/recipes.py` reads every recipe from Blizzard's Forever profession
+  data: what it makes, the materials and the amount. Blizzard does not publish
+  the skill a recipe needs, so that comes from the recipe item that teaches it
+  (when one has been seen on the auction house) or from original Classic.
+  New trainer-taught recipes can show `?` for skill and are never hidden by
+  the skill filter. Vendor prices for materials also come from Classic data.
+  If Blizzard's recipes are ever unavailable, the dashboard falls back to
+  `site/recipes.json`, a Wrath Classic list built by `tools/build_recipes.py`.
 - **Auction cut.** Resale margins assume a 5% cut (15% at Blackwater), set in
   `collector/config.json`.
 
@@ -128,6 +131,8 @@ Everything lives on the `gh-pages` branch under `data/`, as small JSON files:
 | --- | --- |
 | `meta.json` | Tracked houses and last update |
 | `items.json` | Item names, quality, type, vendor price |
+| `recipes.json` | Recipes from Blizzard's profession data, rebuilt daily |
+| `recipe_items.json` | Which recipe items have been read, and what they teach |
 | `<house>/summary.json` | One row per item listed now, with 7- and 30-day ranges |
 | `<house>/h/<date>/<shard>.json` | Hourly points, kept 30 days |
 | `<house>/d/<month>/<shard>.json` | Daily points, kept indefinitely |
@@ -137,6 +142,12 @@ Everything lives on the `gh-pages` branch under `data/`, as small JSON files:
 History is split into 64 shards by item id, so viewing an item downloads a few
 kilobytes. The branch is replaced with a single commit each hour, which keeps
 the repository from growing with every snapshot.
+
+## Looking at the API
+
+Forever's endpoints are undocumented. Actions tab → Probe the API → Run
+workflow prints what Blizzard returns for any paths you give it, for example
+`/data/wow/recipe/55135`. It changes nothing.
 
 ## Changing the dashboard
 
@@ -160,8 +171,8 @@ python3 -m http.server --directory public
 
 ## Credits
 
-Recipes from [wow-classic-items](https://github.com/nexus-devs/wow-classic-items)
-(MIT). Charts by [uPlot](https://github.com/leeoniya/uPlot) (MIT). Typeface: Alegreya
+Classic skill levels and vendor prices from
+[wow-classic-items](https://github.com/nexus-devs/wow-classic-items) (MIT). Charts by [uPlot](https://github.com/leeoniya/uPlot) (MIT). Typeface: Alegreya
 and Alegreya Sans by Huerta Tipográfica (SIL Open Font License). Game data
 from Blizzard's Battle.net API. Not affiliated with or endorsed by Blizzard
 Entertainment.

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Build site/recipes.json from the open wow-classic-items dataset (MIT).
+"""Build the Classic fallback data from the open wow-classic-items dataset (MIT).
+
+Writes site/recipes.json, the recipe list the dashboard falls back to when
+Blizzard's Forever recipes (collector/recipes.py) have not been published, and
+collector/classic.json, the skill levels and vendor prices that script borrows.
 
     npm pack wow-classic-items && tar xzf wow-classic-items-*.tgz
     python3 tools/build_recipes.py package/data/json/data.json
@@ -69,6 +73,14 @@ def main(src: str) -> None:
     out = {"source": "wow-classic-items 2.0.1 (MIT), Wrath Classic recipe data",
            "names": names, "quality": quality, "vendor": vendor,
            "professions": dict(sorted(professions.items()))}
+    # What the collector needs from Classic when it builds recipes from
+    # Blizzard's Forever data: required skill by profession and item, which
+    # materials a vendor sells and for how much, and item quality.
+    classic = {"skill": {prof: {str(r[0]): r[1] for r in rows} for prof, rows in professions.items()},
+               "vendor": {str(i["itemId"]): i["vendorPrice"] for i in items if i.get("vendorPrice")},
+               "quality": {str(i["itemId"]): QUALITY.get(i.get("quality"), 1) for i in items if i.get("createdBy")}}
+    side = Path(__file__).resolve().parents[1] / "collector" / "classic.json"
+    side.write_text(json.dumps(classic, separators=(",", ":")), encoding="utf-8")
     target = Path(__file__).resolve().parents[1] / "site" / "recipes.json"
     target.write_text(json.dumps(out, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
     print({k: len(v) for k, v in out["professions"].items()}, target.stat().st_size, "bytes")
