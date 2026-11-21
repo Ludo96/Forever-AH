@@ -187,7 +187,7 @@ def simulate(out: Path, days: float, end: int, ruleset_info=True, cfg=None,
             # One clear deal and one below-vendor listing for the dashboard.
             api.extra[116] = [
                 {"id": 1, "item": {"id": 760}, "quantity": 1, "time_left": "LONG",
-                 "buyout": max(1, deal_price(api, 760) // 2)},
+                 "buyout": max(1, deal_price(api, 760) // 4)},
                 {"id": 2, "item": {"id": 771}, "quantity": 1, "time_left": "LONG",
                  "buyout": 3}]
         collect.run(api, out, cfg, now=api.now)
@@ -389,7 +389,14 @@ def run_checks(keep: Path | None, days: float) -> int:
 
     class RecipeApi:
         docs = {
-            "/data/wow/profession/index": {"professions": [{"name": "Leatherworking", "id": 165}, {"name": "Enchanting", "id": 333}]},
+            "/data/wow/profession/index": {"professions": [{"name": "Leatherworking", "id": 165}, {"name": "Enchanting", "id": 333},
+                                                           {"name": "Fishing", "id": 356}, {"name": "[DNT] Test", "id": 999}]},
+            "/data/wow/profession/356": {"skill_tiers": [{"name": "Fishing", "id": 2943}]},
+            "/data/wow/profession/999": {"skill_tiers": [{"name": "Test", "id": 9999}]},
+            "/data/wow/profession/356/skill-tier/2943": {"categories": [{"name": "Fishing", "recipes": [{"name": "Fishing Rack", "id": 70000}]}]},
+            "/data/wow/profession/999/skill-tier/9999": {"categories": [{"name": "Test", "recipes": [{"name": "Fishing Rack", "id": 70000}]}]},
+            "/data/wow/recipe/70000": {"crafted_item": {"name": "Fishing Rack", "id": 279965}, "crafted_quantity": {"value": 1.0},
+                "reagents": [{"reagent": {"name": "Simple Wood", "id": 4470}, "quantity": 4}]},
             "/data/wow/profession/165": {"skill_tiers": [{"name": "Leatherworking", "id": 2945}]},
             "/data/wow/profession/333": {"skill_tiers": [{"name": "Enchanting", "id": 2946}]},
             "/data/wow/profession/165/skill-tier/2945": {"categories": [{"name": "Armor Kits", "recipes": [
@@ -431,7 +438,8 @@ def run_checks(keep: Path | None, days: float) -> int:
                            "8173": ["Thick Armor Kit", 1, "Consumable", "Permanent", 40, 1000, 0]},
                           {"skill": {"Leatherworking": {"8173": 200}}, "vendor": {"4291": 500}, "quality": {}}, cache, log=lambda m: None)
     lw = built["professions"].get("Leatherworking")
-    check(list(built["professions"]) == ["Leatherworking"] and len(lw) == 5, "recipes that make no item are left out")
+    check(list(built["professions"]) == ["Fishing", "Leatherworking"] and len(lw) == 5,
+          f"a one-recipe profession is kept; test professions and recipes that make no item are left out: {list(built['professions'])}")
     check(lw[0] == [8173, 200, 1, 1, [4304, 5, 4291, 1]], f"old recipe takes its skill from Classic: {lw[0]}")
     check(lw[1] == [252462, 210, 1, 3, [8173, 1, 11137, 2]], f"new recipe takes its skill from the item that teaches it: {lw[1]}")
     check(lw[2] == [260000, 290, 1, 1, [249428, 2]], "recipe items found by search supply skill levels too")
@@ -448,7 +456,7 @@ def run_checks(keep: Path | None, days: float) -> int:
     check(alerts.money(20507) == "2g 5s 7c" and alerts.money(1800) == "18s" and alerts.money(10000) == "1g"
           and alerts.money(10001) == "1g 0s 1c", "prices are written like the game does")
     sealed = alerts.seal({"offset": 5, "alerts": {"42": []}}, "tok")
-    check(alerts.unseal(sealed, "tok") == {"offset": 5, "alerts": {"42": []}} and b"42" not in sealed
+    check(alerts.unseal(sealed, "tok") == {"offset": 5, "alerts": {"42": []}} and b"alerts" not in __import__("base64").b64decode(sealed)
           and alerts.unseal(sealed, "other") is None, "alert storage is encrypted and tied to the bot token")
 
     class FakeBot:

@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from collect import Api, ApiError, NotFound, read_json, text, write_json  # noqa: E402
 
 REBUILD_AFTER = 24 * 3600
-VERSION = 2                     # raise to force a rebuild after changing this script
+VERSION = 3                     # raise to force a rebuild after changing this script
 RECIPE_CLASS = 9                # Blizzard's item class for Pattern, Plans, Formula...
 MAX_ITEM_LOOKUPS = 2500         # recipe items read per run
 
@@ -147,9 +147,11 @@ def build(api, region: str, items: dict, classic: dict, item_cache: dict, log=pr
         quality[str(made["id"])] = known[1] if known else classic["quality"].get(str(made["id"]), 1)
         professions.setdefault(prof, []).append([made["id"], skill, low, high, flat])
 
-    # Blizzard's index also carries a test profession and a few stubs.
+    # Blizzard's index also carries a test profession. Gathering professions
+    # (Fishing, Skinning, Herbalism) have only a handful of recipes in Forever,
+    # such as Fishing Rack, so any count is kept.
     professions = {name: rows for name, rows in professions.items()
-                   if len(rows) >= 5 and "[" not in name and "test" not in name.lower()}
+                   if "[" not in name and "test" not in name.lower()}
     for rows in professions.values():
         rows.sort(key=lambda r: (r[1] is None, r[1] or 0, r[0]))
     total = sum(len(v) for v in professions.values())
