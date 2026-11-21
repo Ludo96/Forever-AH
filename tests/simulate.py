@@ -441,6 +441,68 @@ def run_checks(keep: Path | None, days: float) -> int:
     check(cache == {"252999": [252462, "Leatherworking", 210], "14000": [], "253000": [260000, "Leatherworking", 290]},
           "recipe items are only read once")
 
+    print("7. Telegram alerts")
+    import alerts
+    check([alerts.parse_price(x) for x in ("1g 50s", "1g50s", "18s", "2500c", "1.5g", "3", "2g 5s 7c", "abc", "5x", "")]
+          == [15000, 15000, 1800, 2500, 15000, 30000, 20507, None, None, None], "prices are read in every common form")
+    check(alerts.money(20507) == "2g 5s 7c" and alerts.money(1800) == "18s" and alerts.money(10000) == "1g"
+          and alerts.money(10001) == "1g 0s 1c", "prices are written like the game does")
+    sealed = alerts.seal({"offset": 5, "alerts": {"42": []}}, "tok")
+    check(alerts.unseal(sealed, "tok") == {"offset": 5, "alerts": {"42": []}} and b"42" not in sealed
+          and alerts.unseal(sealed, "other") is None, "alert storage is encrypted and tied to the bot token")
+
+    class FakeBot:
+        def __init__(self):
+            self.sent, self.queue = [], []
+        def updates(self, offset):
+            return [u for u in self.queue if u["update_id"] >= offset]
+        def send(self, chat, text):
+            if chat == "666":
+                raise alerts.TelegramError(403, "blocked")
+            self.sent.append((chat, text))
+
+    tdir = Path(tempfile.mkdtemp())
+    (tdir / "data" / "113").mkdir(parents=True)
+    collect.write_json(tdir / "data" / "items.json", {"12359": ["Thorium Bar", 1], "12360": ["Arcanite Bar", 1],
+                                                       "2589": ["Linen Cloth", 1], "2592": ["Wool Cloth", 1]})
+    def prices(low):
+        collect.write_json(tdir / "data" / "113" / "summary.json",
+                           {"cols": ["id", "low"], "rows": [[12359, low], [12360, 500000], [2589, 10]]})
+    msg = lambda uid, chat, text: {"update_id": uid, "message": {"chat": {"id": chat}, "text": text}}
+    bot = FakeBot()
+    prices(1900)
+    bot.queue = [msg(1, 42, "/alert thorium bar below 18s"), msg(2, 42, "/alert Arcanite Bar above 60g"),
+                 msg(3, 42, "/alert cloth below 1s"), msg(4, 7, "/start a_2589_b_12"), msg(5, 7, "hello"),
+                 msg(6, 666, "/alert Linen Cloth below 5c"), msg(7, 42, "/alert Thorium Bar below lots")]
+    run = lambda: alerts.run(bot, tdir, "tok", "https://x/", log=lambda m: None)
+    state = run()
+    said = {u: t for u, (c, t) in enumerate(bot.sent)}
+    check(len(bot.sent) == 6 and "Alert set: Thorium Bar below 18s" in bot.sent[0][1] and "19s" in bot.sent[0][1],
+          f"alerts are confirmed with the current price: {bot.sent[:1]}")
+    check("Which one?" in bot.sent[2][1] and "Linen Cloth" in bot.sent[2][1], "an unclear name lists the matches")
+    check(bot.sent[3] == ("7", "Alert set: Linen Cloth below 12c. Lowest right now: 10c.") , f"dashboard link sets an alert: {bot.sent[3]}")
+    check(any("Linen Cloth dropped to 10c" in t and "#h=113&t=all&i=2589" in t for c, t in bot.sent if c == "7"),
+          "an alert that is already met fires straight away, with a link")
+    check("could not read the price" in bot.sent[4][1], "a bad price is explained")
+    check("666" not in state["alerts"] and state["offset"] == 8, "people who blocked the bot are dropped; messages are read once")
+    bot.sent = []
+    prices(1750)
+    run()
+    check(bot.sent == [("42", "Thorium Bar dropped to 17s 50c (your alert: below 18s).\nhttps://x/#h=113&t=all&i=12359")],
+          f"crossing the level fires once: {bot.sent}")
+    bot.sent = []
+    prices(1790); run(); prices(1820); run(); prices(1700); run()
+    check(bot.sent == [], "it stays quiet until the price has moved 3% back across")
+    prices(1860); run(); prices(1780); state = run()
+    check(len(bot.sent) == 1 and "17s 80c" in bot.sent[0][1], "and then fires again")
+    bot.sent = []
+    bot.queue = [msg(8, 42, "/list"), msg(9, 42, "/remove 1"), msg(10, 42, "/remove 9"), msg(11, 7, "/clear")]
+    state = run()
+    check("1. Thorium Bar below 18s" in bot.sent[0][1] and "2. Arcanite Bar above 60g" in bot.sent[0][1]
+          and bot.sent[1][1] == "Removed: Thorium Bar below 18s." and "/list" in bot.sent[2][1]
+          and "Removed all 1" in bot.sent[3][1] and list(state["alerts"]) == ["42"], "list, remove and clear work")
+    check(b"Thorium" not in (tdir / "data" / "alerts.bin").read_bytes(), "nothing readable is published")
+
     print("\nall checks passed" if not check.failed else f"\n{check.failed} check(s) FAILED")
     return 1 if check.failed else 0
 

@@ -842,6 +842,49 @@ function recipeBlock([prof, [, skill, lo, hi, flat]]) {
       h("li", { class: "sum" }, h("span", { text: complete ? "Materials" : "Materials on sale" }), money(total))));
 }
 
+/* "1g 50s", "18s", "2500c", "1.5g" or a plain number of gold -> copper. */
+function parsePrice(raw) {
+  const s = raw.toLowerCase().replace(/[,\s]/g, "");
+  if (!s) return null;
+  if (/^\d+(\.\d+)?$/.test(s)) return Math.round(parseFloat(s) * 10000);
+  const parts = [...s.matchAll(/(\d+(?:\.\d+)?)([gsc])/g)];
+  if (!parts.length || parts.map(m => m[0]).join("") !== s) return null;
+  const total = parts.reduce((sum, m) => sum + parseFloat(m[1]) * { g: 10000, s: 100, c: 1 }[m[2]], 0);
+  return total > 0 ? Math.round(total) : null;
+}
+const plainMoney = c => moneyText(c).replace(/,/g, "");
+
+/* Telegram alert: builds a link that opens the bot with the alert filled in. */
+function alertBox(row) {
+  const bot = S.meta && S.meta.telegram;
+  if (!bot || currentHouse().faction !== "horde") return null;
+  const dir = h("select", { "aria-label": "Alert when the lowest price is" },
+    h("option", { value: "b", text: "drops below" }), h("option", { value: "a", text: "rises above" }));
+  const price = h("input", { type: "text", class: "alert-price", "aria-label": "Price",
+    value: row.listed ? plainMoney(row.low) : "", placeholder: "1g 50s" });
+  const go = h("a", { class: "quiet alert-go", target: "_blank", rel: "noopener", text: "Set in Telegram" });
+  const note = h("p", { class: "alert-note" });
+  const update = () => {
+    const copper = parsePrice(price.value);
+    if (copper == null) {
+      go.removeAttribute("href");
+      go.setAttribute("aria-disabled", "true");
+      note.textContent = price.value.trim() ? "Write the price like 1g 50s, 18s or 2500c." : "Enter a price.";
+      return;
+    }
+    go.href = `https://t.me/${bot}?start=a_${row.id}_${dir.value}_${copper}`;
+    go.removeAttribute("aria-disabled");
+    note.textContent = `Telegram opens the bot; tap Start to save the alert for ${moneyText(copper)}. It confirms within about 20 minutes. You can also type /alert to it.`;
+  };
+  dir.addEventListener("change", update);
+  price.addEventListener("input", update);
+  update();
+  return h("div", { class: "alert-box" },
+    h("p", { class: "chart-title", text: "Price alert" }),
+    h("div", { class: "alert-row" }, h("span", { text: "Message me when the lowest price" }), dir, price, go),
+    note);
+}
+
 function closeItem() {
   S.item = null;
   writeHash();
@@ -871,6 +914,7 @@ function renderDetail(keepCharts) {
         text: watched ? "★ Watching" : "☆ Watch", onclick: () => toggleWatch(row.id) }),
       h("a", { href: `https://www.wowhead.com/forever/item=${row.id}`, target: "_blank", rel: "noopener",
         text: "Look it up on Wowhead" })),
+    alertBox(row),
     row.listed ? h("dl", { class: "facts" },
       fact("Lowest now", money(row.low)),
       fact("Market now", money(row.market)),

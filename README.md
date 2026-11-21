@@ -37,6 +37,25 @@ item, and publishes a static dashboard. There is no server and no database.
   by hour of day. The page address updates as you browse, so any view can be
   shared as a link.
 
+- **Telegram alerts**: get a message when an item's lowest price drops below
+  or rises above a level. Set one from the alert box on an item's page, or by
+  messaging the bot. Each person gets their own alerts.
+
+## Telegram alerts
+
+1. In Telegram, message **@BotFather**, send `/newbot` and follow the prompts.
+   It gives you a token.
+2. Save the token as a repository secret named `TELEGRAM_BOT_TOKEN`.
+3. After the next collection run, item pages show a Price alert box.
+
+Commands the bot understands: `/alert Thorium Bar below 18s`,
+`/alert Arcane Crystal above 9g`, `/list`, `/remove 2`, `/clear`, `/help`.
+The bot is answered by the collection runs, so replies take up to about 20
+minutes. An alert fires once when the price crosses its level, then waits
+until the price has moved 3% back before it can fire again. Alerts watch the
+Horde auction house. They are stored encrypted in `data/alerts.bin`, keyed to
+the bot token, so changing the token starts the list afresh.
+
 ## Setup
 
 1. **Blizzard API client.** Create one at <https://develop.battle.net/access/clients>.

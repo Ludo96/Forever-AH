@@ -49,6 +49,11 @@ jobs:
           BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
         run: python3 collector/recipes.py --out public
 
+      - name: Send price alerts
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: python3 collector/alerts.py --out public --site "https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+
       - name: Publish the dashboard
         run: |
           cp -r site/. public/

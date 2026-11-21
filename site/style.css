@@ -212,6 +212,15 @@ td.tight, th.tight { padding-right: 0; width: 1%; }
 .hours-wait { color: var(--muted); padding: 6px 0 14px; }
 .hours-title { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); }
 
+/* ---- price alert ---- */
+.alert-box { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+.alert-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; color: var(--ink-2); }
+.alert-row select, .alert-row input { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
+.alert-price { width: 7.5em; }
+.alert-go { text-decoration: none; }
+.alert-go[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+.alert-note { color: var(--muted); font-size: .9rem; margin-top: 6px; }
+
 /* ---- item detail ---- */
 .detail { position: sticky; top: 16px; background: var(--surface); border: 1px solid var(--line);
   border-radius: 12px; padding: 20px 20px 18px; max-height: calc(100vh - 32px); overflow-y: auto; }
