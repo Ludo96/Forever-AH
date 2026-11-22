@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Telegram price alerts for the Forever-AH dashboard.
 
-Each run (after the collector):
-  1. reads new messages sent to the bot and acts on them:
+A listener job (.github/workflows/bot.yml) runs this all the time with
+--listen: it waits on Telegram for messages, answers them within seconds,
+re-reads the published prices every few minutes and messages whoever set an
+alert when it fires. The collection job only calls it with --meta-only, to put
+the bot's username on the dashboard.
+
+  1. messages sent to the bot are acted on:
        /alert Thorium Bar below 18s     add an alert
        /alert 12359 above 1g 20s        by item id
        /list                            show your alerts
@@ -16,9 +21,8 @@ the price has gone back across by 3%, so a price sitting at the level does not
 message every hour.
 
 Alerts and the chats they belong to are kept in data/alerts.bin on the
-published branch, encrypted with a key derived from the bot token, so chat ids
-are not readable by visitors. Messages are answered on the next run, so a
-reply can take up to about 20 minutes.
+"alerts" branch, encrypted with a key derived from the bot token, so chat ids
+are not readable by visitors.
 
 Needs the TELEGRAM_BOT_TOKEN secret; without it this script does nothing.
 Any failure only warns, so prices keep publishing.
@@ -34,6 +38,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import time
 import urllib.error
@@ -128,7 +133,7 @@ HELP = ("I watch the Horde auction house and message you when a price crosses a 
         "/clear  removes all of yours\n\n"
         "Prices: 1g 50s, 18s, 2500c, or a plain number of gold. "
         "You can also use the Telegram alert button on an item's page on the dashboard. "
-        "New prices arrive about once an hour, and I answer within about 20 minutes.")
+        "New prices arrive about once an hour, and I check your alerts each time.")
 
 
 def find_item(query: str, names: dict) -> tuple[int | None, list[str]]:
@@ -254,11 +259,11 @@ class Telegram:
     def __init__(self, token: str):
         self.base = f"https://api.telegram.org/bot{token}/"
 
-    def call(self, method: str, **params):
+    def call(self, method: str, _wait: int = 0, **params):
         req = urllib.request.Request(self.base + method, data=json.dumps(params).encode(),
                                      headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=30 + _wait) as resp:
                 return json.load(resp).get("result")
         except urllib.error.HTTPError as err:
             body = err.read().decode(errors="replace")[:200]
@@ -267,8 +272,9 @@ class Telegram:
     def me(self) -> dict:
         return self.call("getMe")
 
-    def updates(self, offset: int) -> list:
-        return self.call("getUpdates", offset=offset, timeout=0, allowed_updates=["message"]) or []
+    def updates(self, offset: int, timeout: int = 0) -> list:
+        return self.call("getUpdates", offset=offset, timeout=timeout, allowed_updates=["message"],
+                         _wait=timeout) or []
 
     def send(self, chat: str, text: str) -> None:
         self.call("sendMessage", chat_id=int(chat), text=text, disable_web_page_preview=True)
@@ -282,7 +288,7 @@ class TelegramError(Exception):
 
 # --------------------------------------------------------------- run ----
 
-def run(bot, out: Path, token: str, site: str, log=print) -> dict:
+def run(bot, out: Path, token: str, site: str, log=print, wait: int = 0) -> dict:
     data = Path(out) / "data"
     names = {k: v[0] for k, v in (read_json(data / "items.json") or {}).items()}
     summary = read_json(data / str(HOUSE) / "summary.json") or {"cols": [], "rows": []}
@@ -297,7 +303,7 @@ def run(bot, out: Path, token: str, site: str, log=print) -> dict:
         state = {"offset": 0, "alerts": {}}
 
     replies = []
-    for update in bot.updates(state["offset"]):
+    for update in bot.updates(state["offset"], wait):
         state["offset"] = max(state["offset"], update["update_id"] + 1)
         msg = update.get("message") or {}
         chat, text = msg.get("chat", {}).get("id"), msg.get("text")
@@ -328,23 +334,94 @@ def run(bot, out: Path, token: str, site: str, log=print) -> dict:
     data.mkdir(parents=True, exist_ok=True)
     path.write_bytes(seal(state, token))
     total = sum(len(a) for a in state["alerts"].values())
-    log(f"alerts: {len(replies)} replies, {len(fired)} fired, {total} alerts from {len(state['alerts'])} people")
+    if replies or fired or not wait:
+        log(f"alerts: {len(replies)} replies, {len(fired)} fired, {total} alerts from {len(state['alerts'])} people")
     return state
+
+
+def fetch(url: str, target: Path) -> bool:
+    """Download one published file; keep the old copy if that fails."""
+    try:
+        with urllib.request.urlopen(f"{url}?t={int(time.time())}", timeout=60) as resp:
+            body = resp.read()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(body)
+    return True
+
+
+def save(workdir: Path) -> None:
+    """Publish alerts.bin as the single commit of the "alerts" branch."""
+    git = lambda *a: subprocess.run(["git", "-C", str(workdir), *a], check=True,  # noqa: E731
+                                    capture_output=True, text=True)
+    git("add", "-f", "data/alerts.bin")
+    has_commit = subprocess.run(["git", "-C", str(workdir), "rev-parse", "-q", "--verify", "HEAD"],
+                                capture_output=True).returncode == 0
+    git("commit", "-q", *(["--amend"] if has_commit else []), "-m", "Alert state (encrypted)")
+    git("push", "-q", "--force", "origin", "HEAD:alerts")
+
+
+def listen(token: str, site: str, workdir: Path, seconds: int) -> None:
+    """Answer the bot for `seconds`, checking alerts whenever prices change."""
+    bot = Telegram(token)
+    data = workdir / "data"
+    if not (data / "alerts.bin").exists():          # first start: take over the old copy
+        fetch(f"{site}data/alerts.bin", data / "alerts.bin")
+    end = time.time() + seconds
+    fetched, saved, saved_at = 0.0, None, 0.0
+    state_text = lambda: json.dumps(unseal((data / "alerts.bin").read_bytes(), token)  # noqa: E731
+                                    if (data / "alerts.bin").exists() else None, sort_keys=True)
+    saved = state_text()
+    print(f"listening for {seconds // 60} minutes", flush=True)
+    while time.time() < end - 30:
+        if time.time() - fetched > 180:
+            fetch(f"{site}data/items.json", data / "items.json")
+            fetch(f"{site}data/{HOUSE}/summary.json", data / str(HOUSE) / "summary.json")
+            fetched = time.time()
+        try:
+            state = run(bot, workdir, token, site, log=lambda m: print(m, flush=True),
+                        wait=int(min(50, max(1, end - 30 - time.time()))))
+        except TelegramError as err:
+            print(f"telegram: {err}", flush=True)
+            time.sleep(30 if err.code == 409 else 5)    # 409: another reader is running
+            continue
+        except (urllib.error.URLError, TimeoutError, OSError) as err:
+            print(f"network: {err}", flush=True)
+            time.sleep(5)
+            continue
+        now_text = json.dumps(state, sort_keys=True)
+        if now_text != saved and time.time() - saved_at > 20:
+            try:
+                save(workdir)
+                saved, saved_at = now_text, time.time()
+            except subprocess.CalledProcessError as err:
+                print(f"::warning::could not save alerts: {err.stderr}", flush=True)
+    if state_text() != saved:
+        save(workdir)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--out", default="public")
     parser.add_argument("--site", default="", help="dashboard address, for links in alerts")
+    parser.add_argument("--listen", type=int, default=0, metavar="SECONDS",
+                        help="answer the bot continuously; --out is the alerts branch checkout")
+    parser.add_argument("--meta-only", action="store_true",
+                        help="only record the bot's username in meta.json")
     args = parser.parse_args()
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         print("alerts: no TELEGRAM_BOT_TOKEN secret, skipped")
         return 0
+    if args.listen:
+        listen(token, args.site, Path(args.out), args.listen)
+        return 0
     try:
         bot = Telegram(token)
         name = (bot.me() or {}).get("username")
-        run(bot, Path(args.out), token, args.site)
+        if not args.meta_only:
+            run(bot, Path(args.out), token, args.site)
         meta_path = Path(args.out) / "data" / "meta.json"
         meta = read_json(meta_path)
         if meta is not None and name:

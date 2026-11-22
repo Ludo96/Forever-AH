@@ -462,7 +462,7 @@ def run_checks(keep: Path | None, days: float) -> int:
     class FakeBot:
         def __init__(self):
             self.sent, self.queue = [], []
-        def updates(self, offset):
+        def updates(self, offset, timeout=0):
             return [u for u in self.queue if u["update_id"] >= offset]
         def send(self, chat, text):
             if chat == "666":

@@ -50,11 +50,12 @@ item, and publishes a static dashboard. There is no server and no database.
 
 Commands the bot understands: `/alert Thorium Bar below 18s`,
 `/alert Arcane Crystal above 9g`, `/list`, `/remove 2`, `/clear`, `/help`.
-The bot is answered by the collection runs, so replies take up to about 20
-minutes. An alert fires once when the price crosses its level, then waits
+A separate workflow, Telegram bot, listens all the time, so the bot answers
+within seconds; each run lasts just under six hours and starts the next. It
+checks alerts whenever new prices are published. An alert fires once when the price crosses its level, then waits
 until the price has moved 3% back before it can fire again. Alerts watch the
-Horde auction house. They are stored encrypted in `data/alerts.bin`, keyed to
-the bot token, so changing the token starts the list afresh.
+Horde auction house. They are stored encrypted in `data/alerts.bin` on the
+`alerts` branch, keyed to the bot token, so changing the token starts the list afresh.
 
 ## Setup
 

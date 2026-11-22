@@ -49,10 +49,14 @@ jobs:
           BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
         run: python3 collector/recipes.py --out public
 
-      - name: Send price alerts
+      - name: Name the alert bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: python3 collector/alerts.py --out public --site "https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+        run: |
+          # Alerts are answered by the bot workflow, which keeps its state on the
+          # "alerts" branch; once that exists the old copy here is not needed.
+          if git ls-remote --exit-code --heads "$REMOTE" alerts >/dev/null; then rm -f public/data/alerts.bin; fi
+          python3 collector/alerts.py --out public --meta-only
 
       - name: Publish the dashboard
         run: |

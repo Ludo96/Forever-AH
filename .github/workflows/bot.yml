@@ -1,0 +1,54 @@
+name: Telegram bot
+
+# Keeps the price-alert bot answering. One run listens for just under six
+# hours (GitHub's limit for a job), then starts the next. The hourly schedule
+# restarts it if the chain ever breaks; a second run waits for the first.
+on:
+  schedule:
+    - cron: "11 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["collector/alerts.py", ".github/workflows/bot.yml"]
+
+permissions:
+  contents: write                 # saves alert state to the "alerts" branch
+  actions: write                  # starts the next run
+
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: false
+
+jobs:
+  listen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    env:
+      REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the alert state
+        run: |
+          if git ls-remote --exit-code --heads "$REMOTE" alerts >/dev/null; then
+            git clone --quiet --depth 1 --branch alerts "$REMOTE" state
+          else
+            mkdir state
+            git -C state init --quiet --initial-branch alerts
+            git -C state remote add origin "$REMOTE"
+          fi
+          git -C state config user.name "Forever-AH bot"
+          git -C state config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Answer the bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: >
+          python3 collector/alerts.py --out state --listen 20700
+          --site "https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+
+      - name: Start the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run bot.yml --repo "$GITHUB_REPOSITORY" --ref main

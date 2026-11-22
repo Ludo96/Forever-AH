@@ -874,7 +874,7 @@ function alertBox(row) {
     }
     go.href = `https://t.me/${bot}?start=a_${row.id}_${dir.value}_${copper}`;
     go.removeAttribute("aria-disabled");
-    note.textContent = `Telegram opens the bot; tap Start to save the alert for ${moneyText(copper)}. It confirms within about 20 minutes. You can also type /alert to it.`;
+    note.textContent = `Telegram opens the bot; tap Start to save the alert for ${moneyText(copper)}. You can also type /alert to it.`;
   };
   dir.addEventListener("change", update);
   price.addEventListener("input", update);
