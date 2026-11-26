@@ -212,6 +212,8 @@ td.tight, th.tight { padding-right: 0; width: 1%; }
 .hours-wait { color: var(--muted); padding: 6px 0 14px; }
 .hours-title { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); }
 
+.tz { color: var(--muted); font-size: .88rem; margin-top: 2px; }
+
 /* ---- price alert ---- */
 .alert-box { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
 .alert-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; color: var(--ink-2); }

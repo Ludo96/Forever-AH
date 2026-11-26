@@ -249,7 +249,7 @@ const TABS = {
     cols: ["star", "name", "buyAt", "sellAt", "swing", "peakAt", "sold7"], sort: ["swing", -1],
     rows: () => S.rows.filter(r => r.buyHour != null && r.sold7 >= 10),
     top: marketHours,
-    blurb: () => "When each item tends to be cheapest and dearest across the day, as a percentage against its average for the day. Times are in your local time. Daily swing is the gap between the two. An hour counts once it has been seen on 3 days, and a pattern from under two weeks of history can still be coincidence.",
+    blurb: () => `When each item tends to be cheapest and dearest across the day, as a percentage against its average for the day. Daily swing is the gap between the two. An hour counts once it has been seen on 3 days, and a pattern from under two weeks of history can still be coincidence. ${TZ_NOTE}`,
   },
   all: {
     label: "All items",
@@ -332,6 +332,32 @@ function kindOf(it) {
 
 /* The collector files everything by UTC hour; people read local time. */
 const OFF = Math.round(new Date().getTimezoneOffset() / 60);          // local hour + OFF = UTC hour
+
+/* Which clock the times are on: "Dhaka time (UTC+6), 5 hours ahead of EU server time". */
+const TZ_NOTE = (() => {
+  const offsetIn = zone => {                       // minutes ahead of UTC, now, in a zone
+    const now = new Date();
+    const local = new Date(now.toLocaleString("en-US", { timeZone: zone }));
+    const utc = new Date(now.toLocaleString("en-US", { timeZone: "UTC" }));
+    return Math.round((local - utc) / 60000);
+  };
+  const fmt = mins => {
+    const sign = mins < 0 ? "−" : "+", a = Math.abs(mins);
+    return `UTC${sign}${Math.floor(a / 60)}${a % 60 ? ":" + pad(a % 60) : ""}`;
+  };
+  let zone = "", mine = -new Date().getTimezoneOffset(), server = 60;
+  try {
+    zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    server = offsetIn("Europe/Paris");             // EU realms run on Central European Time
+  } catch { /* older browser: fall back to the offset alone */ }
+  const place = zone.includes("/") ? zone.split("/").pop().replace(/_/g, " ") + " time" : "Your local time";
+  const diff = (mine - server) / 60;
+  const hours = n => `${Number.isInteger(n) ? n : n.toFixed(1)} hour${Math.abs(n) === 1 ? "" : "s"}`;
+  const vs = diff === 0 ? "the same as EU server time"
+    : `${hours(Math.abs(diff))} ${diff > 0 ? "ahead of" : "behind"} EU server time`;
+  return `Times are in ${place} (${fmt(mine)}), ${vs}.`;
+})();
+const tzLine = () => h("p", { class: "tz", text: TZ_NOTE });
 const toLocal = utcHour => ((utcHour - OFF) % 24 + 24) % 24;
 const clock = hour => `${pad(hour)}:00`;
 const localOrder = utcValues => Array.from({ length: 24 }, (_, l) => utcValues[((l + OFF) % 24 + 24) % 24]);
@@ -383,7 +409,7 @@ function marketHours(compact) {
     : `Averaged over ${Math.round(days)} days.`;
   const trade = hourBars(tradedBy, { fmt: v => `about ${moneyText(v)} traded`,
     idle: `Most gold changes hands around ${clock(toLocal(busy))}. ${basis}` });
-  if (compact) return [trade];
+  if (compact) return [trade, tzLine()];
   const out = [h("div", { class: "hourpair" },
     h("div", null, h("p", { class: "chart-title", text: "Gold traded by hour" }), trade),
     cheap < 0 ? null : h("div", null, h("p", { class: "chart-title", text: "Price level by hour" }),
@@ -406,7 +432,7 @@ async function itemHours(id) {
   const sold = prof.slice(24, 48).map(v => v / 10);
   const days = prof[48];
   const row = S.byId.get(id);
-  const parts = [h("p", { class: "chart-title hours-title", text: "By hour of day" })];
+  const parts = [h("p", { class: "chart-title hours-title", text: "By hour of day" }), tzLine()];
   if (days >= 1) {
     const cheap = peak(price, -1), dear = peak(price);
     const sure = row && row.buyHour != null;
@@ -954,6 +980,7 @@ function renderDetail(keepCharts) {
       h("span", null, h("i", { class: "key s1" }), "Lowest price"),
       h("span", null, h("i", { class: "key s2" }), "Market price"),
       recipesFor(row.id).length ? h("span", null, h("i", { class: "key s3" }), "Cost to craft") : null),
+    tzLine(),
     h("div", { id: "priceChart", class: "chart", role: "img", "aria-label": `Price history for ${row.name}` }),
     h("p", { class: "small-title", text: "Units on sale" }),
     h("div", { id: "qtyChart", class: "chart", role: "img", "aria-label": `Units on sale for ${row.name}` }),
