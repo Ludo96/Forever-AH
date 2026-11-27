@@ -332,7 +332,9 @@ function craftRows(prof = S.prof) {
   const cut = currentHouse().cut;
   const mine = S.skill[prof] || 300;
   const spec = S.spec[prof] || "";
-  const allowed = rec => !rec[5] || (spec ? spec !== "none" && rec[5] === spec : true);
+  // A Master Axesmith, Hammersmith or Swordsmith is also a Weaponsmith.
+  const covers = need => need === spec || (spec.startsWith("Master ") && need === "Weaponsmith");
+  const allowed = rec => !rec[5] || (spec ? spec !== "none" && covers(rec[5]) : true);
   return (S.recipes.professions[prof] || []).filter(rec => rec[1] <= mine && allowed(rec)).map(([id, skill, lo, hi, flat, needs]) => {
     const base = S.byId.get(id) || unlisted(id);
     const makes = (lo + hi) / 2;
