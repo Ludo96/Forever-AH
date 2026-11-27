@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from collect import Api, ApiError, NotFound, read_json, text, write_json  # noqa: E402
 
 REBUILD_AFTER = 24 * 3600
-VERSION = 3                     # raise to force a rebuild after changing this script
+VERSION = 4                     # raise to force a rebuild after changing this script
 RECIPE_CLASS = 9                # Blizzard's item class for Pattern, Plans, Formula...
 MAX_ITEM_LOOKUPS = 2500         # recipe items read per run
 
@@ -72,21 +72,25 @@ def recipe_item_ids(api, namespace: str) -> list[str]:
 
 
 def taught_by_items(api, namespace: str, items: dict, cache: dict, limit: int) -> None:
-    """Read recipe items not looked at yet: cache[item id] = [made item, profession, skill]."""
+    """Read recipe items not looked at yet:
+    cache[item id] = [made item, profession, skill, specialization or ""]."""
     known = [i for i, v in items.items() if v[2] == "Recipe"]
     try:
         known = sorted(set(known) | set(recipe_item_ids(api, namespace)), key=int)
     except (ApiError, NotFound, KeyError):
         pass                                        # no search: use the ones seen on the auction house
-    todo = [i for i in known if i not in cache][:limit]
+    # Entries read before specializations were recorded have 3 fields: read again.
+    todo = [i for i in known if i not in cache or 0 < len(cache[i]) < 4][:limit]
     docs, _ = fetch_all(api, [f"/data/wow/item/{i}" for i in todo], namespace)
     for path, doc in docs.items():
         preview = doc.get("preview_item") or {}
         made = (((preview.get("recipe") or {}).get("item") or {}).get("item") or {}).get("id")
         skill = (preview.get("requirements") or {}).get("skill") or {}
         level = skill.get("level")
+        # "Requires Dragonscale Leatherworking", "Requires Armorsmith"...
+        spec = text((((preview.get("requirements") or {}).get("ability") or {}).get("spell") or {}).get("name"))
         if isinstance(made, int) and isinstance(level, int):
-            cache[path.rsplit("/", 1)[1]] = [made, text((skill.get("profession") or {}).get("name")), level]
+            cache[path.rsplit("/", 1)[1]] = [made, text((skill.get("profession") or {}).get("name")), level, spec]
         else:
             cache[path.rsplit("/", 1)[1]] = []
 
@@ -111,9 +115,12 @@ def build(api, region: str, items: dict, classic: dict, item_cache: dict, log=pr
 
     taught_by_items(api, namespace, items, item_cache, MAX_ITEM_LOOKUPS)
     taught = {}                                     # (profession, made item) -> skill
+    specs = {}                                      # (profession, made item) -> specialization
     for entry in item_cache.values():
         if entry:
             taught[(entry[1], entry[0])] = entry[2]
+            if len(entry) > 3 and entry[3]:
+                specs[(entry[1], entry[0])] = entry[3]
 
     names, quality, vendor, professions = {}, {}, {}, {}
     no_skill = 0
@@ -145,7 +152,8 @@ def build(api, region: str, items: dict, classic: dict, item_cache: dict, log=pr
         names[str(made["id"])] = text(made.get("name")) or text(doc.get("name"))
         known = items.get(str(made["id"]))
         quality[str(made["id"])] = known[1] if known else classic["quality"].get(str(made["id"]), 1)
-        professions.setdefault(prof, []).append([made["id"], skill, low, high, flat])
+        professions.setdefault(prof, []).append([made["id"], skill, low, high, flat,
+                                                 specs.get((prof, made["id"]))])
 
     # Blizzard's index also carries a test profession. Gathering professions
     # (Fishing, Skinning, Herbalism) have only a handful of recipes in Forever,

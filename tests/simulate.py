@@ -415,7 +415,8 @@ def run_checks(keep: Path | None, days: float) -> int:
             "/data/wow/recipe/60003": {"crafted_item": {"name": "Trainer Only B", "id": 260003}, "crafted_quantity": {"value": 1.0},
                 "reagents": [{"reagent": {"name": "Pristine Hide", "id": 249428}, "quantity": 1}]},
             "/data/wow/recipe/7000": {"name": "Enchant Chest", "reagents": [{"reagent": {"name": "Strange Dust", "id": 10940}, "quantity": 1}]},
-            "/data/wow/item/252999": {"preview_item": {"requirements": {"skill": {"profession": {"name": "Leatherworking", "id": 165}, "level": 210}},
+            "/data/wow/item/252999": {"preview_item": {"requirements": {"skill": {"profession": {"name": "Leatherworking", "id": 165}, "level": 210},
+                "ability": {"spell": {"name": "Dragonscale Leatherworking", "id": 10656}}},
                 "recipe": {"item": {"item": {"id": 252462}}}}},
             "/data/wow/item/14000": {"preview_item": {}},
             "/data/wow/item/253000": {"preview_item": {"requirements": {"skill": {"profession": {"name": "Leatherworking", "id": 165}, "level": 290}},
@@ -440,14 +441,19 @@ def run_checks(keep: Path | None, days: float) -> int:
     lw = built["professions"].get("Leatherworking")
     check(list(built["professions"]) == ["Fishing", "Leatherworking"] and len(lw) == 5,
           f"a one-recipe profession is kept; test professions and recipes that make no item are left out: {list(built['professions'])}")
-    check(lw[0] == [8173, 200, 1, 1, [4304, 5, 4291, 1]], f"old recipe takes its skill from Classic: {lw[0]}")
-    check(lw[1] == [252462, 210, 1, 3, [8173, 1, 11137, 2]], f"new recipe takes its skill from the item that teaches it: {lw[1]}")
-    check(lw[2] == [260000, 290, 1, 1, [249428, 2]], "recipe items found by search supply skill levels too")
+    check(lw[0] == [8173, 200, 1, 1, [4304, 5, 4291, 1], None], f"old recipe takes its skill from Classic: {lw[0]}")
+    check(lw[1] == [252462, 210, 1, 3, [8173, 1, 11137, 2], "Dragonscale Leatherworking"],
+          f"new recipe takes its skill and specialization from the item that teaches it: {lw[1]}")
+    check(lw[2] == [260000, 290, 1, 1, [249428, 2], None], "recipe items found by search supply skill levels too")
     check(lw[3][1] is None and lw[4][1] is None, "a new trainer recipe has no skill level and sorts last")
     check(built["vendor"] == {"4291": 500} and built["names"]["252462"] == "Mystic Thick Armor Kit" and built["official"],
           "vendor prices and names carried over")
-    check(cache == {"252999": [252462, "Leatherworking", 210], "14000": [], "253000": [260000, "Leatherworking", 290]},
-          "recipe items are only read once")
+    check(cache == {"252999": [252462, "Leatherworking", 210, "Dragonscale Leatherworking"], "14000": [],
+                    "253000": [260000, "Leatherworking", 290, ""]}, "recipe items are only read once")
+    old = {"252999": [252462, "Leatherworking", 210], "14000": [], "253000": [260000, "Leatherworking", 290, ""]}
+    recipes.build(RecipeApi(), "eu", {"252999": ["Pattern: Mystic Thick Armor Kit", 2, "Recipe", "Leatherworking", 40, 0, 0]},
+                  {"skill": {}, "vendor": {}, "quality": {}}, old, log=lambda m: None)
+    check(old["252999"][3] == "Dragonscale Leatherworking", "items read before specializations were recorded are read again")
 
     print("7. Telegram alerts")
     import alerts

@@ -214,6 +214,16 @@ td.tight, th.tight { padding-right: 0; width: 1%; }
 
 .tz { color: var(--muted); font-size: .88rem; margin-top: 2px; }
 
+/* ---- profession and specialization chips ---- */
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 10px; }
+.chips.spec { margin-top: -2px; }
+.chips-label { color: var(--muted); margin-right: 4px; }
+.chip { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 13px;
+  cursor: pointer; color: var(--ink-2); }
+.chip:hover { border-color: var(--muted); color: var(--ink); }
+.chip[aria-pressed="true"] { background: var(--raise); border-color: var(--brass); color: var(--ink); font-weight: 700; }
+.spec-tag { font-size: .88rem; }
+
 /* ---- price alert ---- */
 .alert-box { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
 .alert-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; color: var(--ink-2); }

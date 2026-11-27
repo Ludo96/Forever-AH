@@ -11,7 +11,7 @@ const S = {
   meta: null, items: {}, house: null, updated: null,
   rows: [], byId: new Map(),
   tab: "home", q: "", hours: null, sort: {}, limit: 100, discount: 20,
-  recipes: null, prof: "Alchemy", skill: {},
+  recipes: null, prof: "Alchemy", skill: {}, spec: {},
   item: null, range: "7d", watch: new Set(), charts: [], observer: null, drawId: 0,
 };
 
@@ -110,6 +110,7 @@ function writeHash() {
 function loadWatch() {
   try { S.watch = new Set(JSON.parse(localStorage.getItem("ledger.watch") || "[]")); } catch { /* private mode */ }
   try { S.skill = JSON.parse(localStorage.getItem("ledger.skill") || "{}") || {}; } catch { /* private mode */ }
+  try { S.spec = JSON.parse(localStorage.getItem("ledger.spec") || "{}") || {}; } catch { /* private mode */ }
 }
 /* Your skill level per profession (1 to 300), saved in this browser. */
 function setSkill(text) {
@@ -122,6 +123,41 @@ function setSkill(text) {
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
 }
+/* Specialization per profession, saved in this browser: "" shows every recipe,
+   "none" only recipes anyone can learn, a name those plus that specialization's. */
+function setSpec(value) {
+  if (value) S.spec[S.prof] = value; else delete S.spec[S.prof];
+  try { localStorage.setItem("ledger.spec", JSON.stringify(S.spec)); } catch { /* not saved */ }
+  S.limit = 100;
+  render();
+}
+function specsOf(prof) {
+  const list = (S.recipes && S.recipes.professions[prof]) || [];
+  return [...new Set(list.map(rec => rec[5]).filter(Boolean))].sort();
+}
+const specLabel = (spec, prof) => spec.replace(` ${prof}`, "");      // "Dragonscale Leatherworking" -> "Dragonscale"
+function pickProf(name) {
+  S.prof = name;
+  S.limit = 100;
+  writeHash();
+  render();
+}
+function profChips() {
+  if (!S.recipes) return [];
+  const chip = (label, on, click, title) => h("button", { type: "button", class: "chip", "aria-pressed": String(on), title, onclick: click, text: label });
+  const specs = specsOf(S.prof);
+  const mine = S.spec[S.prof] || "";
+  return [
+    h("div", { class: "chips", role: "group", "aria-label": "Profession" },
+      Object.keys(S.recipes.professions).map(name => chip(name, name === S.prof, () => pickProf(name)))),
+    specs.length ? h("div", { class: "chips spec", role: "group", "aria-label": "Specialization" },
+      h("span", { class: "chips-label", text: "Specialization" }),
+      chip("Any", !mine, () => setSpec(""), "Show every recipe"),
+      chip("None", mine === "none", () => setSpec("none"), "Only recipes that need no specialization"),
+      specs.map(s => chip(specLabel(s, S.prof), mine === s, () => setSpec(s), `Recipes anyone can learn, plus ${s}`))) : null,
+  ];
+}
+
 function toggleWatch(id) {
   S.watch.has(id) ? S.watch.delete(id) : S.watch.add(id);
   try { localStorage.setItem("ledger.watch", JSON.stringify([...S.watch])); } catch { /* not saved */ }
@@ -144,6 +180,7 @@ function nameCell(row) {
     h("span", { class: `q q${row.quality}`, title: QUALITY[row.quality] || "" }),
     h("span", { text: row.name }),
     row.makes && row.makes !== 1 ? h("span", { class: "sub", text: `makes ${row.makes}` }) : null,
+    row.needs ? h("span", { class: "sub spec-tag", text: row.needs }) : null,
     row.listed ? null : h("span", { class: "sub", text: "not listed" }));
 }
 function changeCell(row) {
@@ -226,13 +263,15 @@ const TABS = {
     label: "Professions",
     cols: ["star", "name", "skill", "cost", "soldFor", "sold24", "craft", "perDay"], sort: ["craft", -1],
     rows: () => craftRows(),
+    top: profChips,
     blurb: () => {
       const cut = Math.round(currentHouse().cut * 100);
       const source = S.recipes && S.recipes.official
         ? "Recipes come from Blizzard's Forever data. Skill levels come from the items that teach each recipe or from original Classic, so a few new recipes show ? and are never filtered out."
         : "Recipes come from Wrath Classic data, so a few differ in Forever. Check the breakdown against the recipe in game before you buy.";
       const mine = S.skill[S.prof] ? ` Showing recipes that need ${S.prof} skill ${S.skill[S.prof]} or lower.` : "";
-      return `Profit is the price the item actually sold for in the past 24 hours (its most recent sale if none), less the ${cut}% auction cut and today's material cost at market price, or vendor price when cheaper. Items never seen selling have no profit and sort last. Profit per day is that margin times the units sold in a day. ${source}${mine}`;
+      const specs = specsOf(S.prof).length ? " Specializations come from the plans and patterns that teach each recipe, so a specialization recipe taught only by a trainer may show as needing none." : "";
+      return `Profit is the price the item actually sold for in the past 24 hours (its most recent sale if none), less the ${cut}% auction cut and today's material cost at market price, or vendor price when cheaper. Items never seen selling have no profit and sort last. Profit per day is that margin times the units sold in a day. ${source}${mine}${specs}`;
     },
   },
   volume: {
@@ -292,7 +331,9 @@ function craftRows(prof = S.prof) {
   if (!S.recipes) return [];
   const cut = currentHouse().cut;
   const mine = S.skill[prof] || 300;
-  return (S.recipes.professions[prof] || []).filter(rec => rec[1] <= mine).map(([id, skill, lo, hi, flat]) => {
+  const spec = S.spec[prof] || "";
+  const allowed = rec => !rec[5] || (spec ? spec !== "none" && rec[5] === spec : true);
+  return (S.recipes.professions[prof] || []).filter(rec => rec[1] <= mine && allowed(rec)).map(([id, skill, lo, hi, flat, needs]) => {
     const base = S.byId.get(id) || unlisted(id);
     const makes = (lo + hi) / 2;
     let cost = 0, complete = true;
@@ -307,7 +348,7 @@ function craftRows(prof = S.prof) {
     const sale = base.soldPrice || (base.sold1 > 0 ? base.low : null);
     const age = base.soldAt ? S.updated - base.soldAt : 0;
     const craft = complete && sale != null ? Math.round(sale * makes * (1 - cut)) - cost : null;
-    return { ...base, skill, makes, sale,
+    return { ...base, skill, makes, sale, needs: needs ? specLabel(needs, prof) : null,
       saleNote: !base.soldPrice && sale != null ? "listing" : age > 86400 ? `${Math.round(age / 86400)}d ago` : null,
       cost: complete ? cost : null, craft,
       // what crafting everything that sold in a day would have made
@@ -725,10 +766,7 @@ function render() {
   ] : S.tab === "vendor" ? [
     h("button", { class: "quiet", type: "button", onclick: () => goTab("deals"), text: "Back to deals" }),
   ] : S.tab === "prof" && S.recipes ? [
-    h("label", { for: "prof", text: "Profession" }),
-    h("select", { id: "prof", onchange: e => { S.prof = e.target.value; S.limit = 100; writeHash(); render(); } },
-      Object.keys(S.recipes.professions).map(name => h("option", { value: name, selected: name === S.prof, text: name }))),
-    h("label", { for: "skill", text: "My skill" }),
+    h("label", { for: "skill", text: `My ${S.prof} skill` }),
     h("input", { id: "skill", type: "text", inputmode: "numeric", maxlength: "3", placeholder: "Any", autocomplete: "off",
       value: S.skill[S.prof] || "", title: "Show only recipes you can craft at this skill level",
       oninput: e => setSkill(e.target.value.replace(/\D/g, "")) }),
@@ -846,7 +884,7 @@ function openItem(id) {
   renderDetail();
 }
 
-function recipeBlock([prof, [, skill, lo, hi, flat]]) {
+function recipeBlock([prof, [, skill, lo, hi, flat, needs]]) {
   const makes = lo === hi ? (lo > 1 ? `, makes ${lo}` : "") : `, makes ${lo} to ${hi}`;
   const mats = [];
   let total = 0, complete = true;
@@ -863,7 +901,7 @@ function recipeBlock([prof, [, skill, lo, hi, flat]]) {
   }
   return h("div", { class: "recipe" },
     h("p", { class: "chart-title", text: `${prof} recipe` }),
-    h("p", { class: "kind", text: `${skill == null ? "Skill level not published" : `Skill ${skill}`}${makes}` }),
+    h("p", { class: "kind", text: `${skill == null ? "Skill level not published" : `Skill ${skill}`}${makes}${needs ? `, requires ${needs}` : ""}` }),
     h("ul", { class: "mats" }, mats,
       h("li", { class: "sum" }, h("span", { text: complete ? "Materials" : "Materials on sale" }), money(total))));
 }
